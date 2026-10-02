@@ -1,0 +1,65 @@
+[project]
+name = "simple-grpc"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "Pablo Galilea", email = "pgalilea@me.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "grpcio>=1.84.0",
+    "grpcio-tools>=1.84.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "F401",
+    "F403"
+]
+
+[tool.ruff.lint.isort]
+lines-after-imports = 2
+force-sort-within-sections = true
+combine-as-imports = true
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+reportInvalidTypeForm = "none"
+reportArgumentType = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
+filterwarnings = [
+  "ignore:The @wait_container_is_ready decorator is deprecated:DeprecationWarning:testcontainers", # redis tests
+]
+
+[dependency-groups]
+dev = [
+    "fastapi>=0.142.2",
+    "pytest>=8.0.0",
+    "pytest-mock>=3.14.0",
+    "pytest-cov>=7.1.0",
+]
+
+
+

@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package pg;
+
+service PG {
+  // A simple RPC.
+  //
+  // Obtains the feature at a given position.
+  //
+  // A feature with an empty name is returned if there's no feature at the given
+  // position.
+  rpc GetFeature(Point) returns (Point) {}
+
+}
+
+
+message Point {
+  int32 latitude = 1;
+  int32 longitude = 2;
+}
