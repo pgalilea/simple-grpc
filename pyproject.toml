@@ -13,6 +13,14 @@ dependencies = [
     "grpcio-tools>=1.84.0",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-mock>=3.14.0",
+    "pytest-cov>=7.1.0",
+    "pytest-asyncio>=1.4.0",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -32,7 +40,8 @@ select = [
 ]
 ignore = [
     "F401",
-    "F403"
+    "F403",
+    "B008"  # allow Depends(dependency) parameter defaults — the DI idiom of this library
 ]
 
 [tool.ruff.lint.isort]
@@ -49,17 +58,4 @@ reportArgumentType = false
 [tool.pytest.ini_options]
 pythonpath = ["."]
 asyncio_mode = "auto"
-filterwarnings = [
-  "ignore:The @wait_container_is_ready decorator is deprecated:DeprecationWarning:testcontainers", # redis tests
-]
-
-[dependency-groups]
-dev = [
-    "fastapi>=0.142.2",
-    "pytest>=8.0.0",
-    "pytest-mock>=3.14.0",
-    "pytest-cov>=7.1.0",
-]
-
-
-
+filterwarnings = []
