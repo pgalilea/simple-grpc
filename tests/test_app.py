@@ -1,7 +1,10 @@
+import inspect
+
 import grpc
 import pytest
 
 from simple_grpc import SimpleGRPC
+from simple_grpc.applications import ServerOptions
 from simple_grpc.models import ProtoConfig
 
 
@@ -181,3 +184,25 @@ def test_invalid_proto_name_raises(tmp_path):
     proto_dir.mkdir()
     with pytest.raises(ValueError, match="my-service.proto"):
         ProtoConfig(proto_path=proto_dir, proto_files=["my-service.proto"], service_path=tmp_path)
+
+
+def test_server_options_stay_in_sync_with_grpc():
+    grpc_params = set(inspect.signature(grpc.server).parameters) - {"thread_pool"}
+    assert set(ServerOptions.__annotations__) == grpc_params
+
+
+def test_server_options_forwarded(tmp_path, mocker):
+    proto_dir = tmp_path / "protos"
+    proto_dir.mkdir()
+    (proto_dir / "demo.proto").write_text(PROTO)
+    (tmp_path / "services").mkdir()
+    spy = mocker.patch("simple_grpc.applications.grpc.server")
+    SimpleGRPC(
+        proto_path=proto_dir,
+        service_path=tmp_path / "services",
+        options=[("grpc.max_receive_message_length", 1)],
+        compression=grpc.Compression.Gzip,
+    )._start()
+    kwargs = spy.call_args.kwargs
+    assert kwargs["options"] == [("grpc.max_receive_message_length", 1)]
+    assert kwargs["compression"] == grpc.Compression.Gzip

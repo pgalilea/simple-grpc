@@ -1,20 +1,20 @@
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
-import importlib.util
 import inspect
 from pathlib import Path
 import sys
 from types import ModuleType
-from typing import Any
+from typing import Any, Unpack
 
-from google.protobuf import json_format, message_factory
+from google.protobuf import message_factory
 from google.protobuf.message import Message
 import grpc
 from grpc_tools import protoc
 
 from simple_grpc.exceptions import GRPCException
-from simple_grpc.models import ProtoConfig
+from simple_grpc.models import ProtoConfig, ServerOptions
 from simple_grpc.params import Depends, hints, noop, param_dependency
+import simple_grpc.utils as utils
 
 
 class SimpleGRPC:
@@ -44,6 +44,7 @@ class SimpleGRPC:
         service_path: str | Path = "grpc_services",
         port: int = 50051,
         dependencies: list[Depends] | None = None,
+        **server_options: Unpack[ServerOptions],
     ) -> None:
         """
         Store the compile config; handlers attach later via :meth:`rpc`.
@@ -59,6 +60,12 @@ class SimpleGRPC:
             dependencies: App-wide ``Depends`` resolved before every RPC,
                 applied automatically to all handlers. Generator dependencies
                 wrap each call (pre/`yield`/post).
+            **server_options: Forwarded verbatim to ``grpc.server()`` at
+                startup (``options``, ``compression``, ``interceptors``,
+                ``maximum_concurrent_rpcs``, ``xds``, ...). Passing
+                ``thread_pool`` here raises ``TypeError``. ``handlers``
+                bypasses this library's servicer registration and is only
+                useful for exotic ``GenericRpcHandler`` setups.
         """
         self.thread_pool = thread_pool or ThreadPoolExecutor()
         self.proto_config = self.config_proto_files(
@@ -69,13 +76,14 @@ class SimpleGRPC:
         self.port = port
         self._handlers: dict[str, dict[str, Callable]] = {}
         self._app_dependencies: tuple[Depends, ...] = tuple(dependencies or ())
+        self._server_options: ServerOptions = server_options
 
     def _start(self) -> None:
         """Compile, load generated modules, register services, and serve."""
 
         self._compile()
         mods = self._load_generated()
-        server = grpc.server(self.thread_pool)
+        server = grpc.server(self.thread_pool, **self._server_options)
         self._register_services(mods, server)
         server.add_insecure_port(f"[::]:{self.port}")
         server.start()
@@ -105,12 +113,12 @@ class SimpleGRPC:
 
         for pf in self.proto_config.proto_files:
             name = Path(pf).stem
-            pb2 = self._module_from_file(sp / f"{name}_pb2.py", f"{name}_pb2")
+            pb2 = utils.module_from_file(sp / f"{name}_pb2.py", f"{name}_pb2")
             # _pb2_grpc does a bare `import <name>_pb2`, so seed sys.modules;
             # pop first so a recompile in the dev loop never serves stale code.
             sys.modules.pop(f"{name}_pb2", None)
             sys.modules[f"{name}_pb2"] = pb2
-            pb2_grpc = self._module_from_file(sp / f"{name}_pb2_grpc.py", f"{name}_pb2_grpc")
+            pb2_grpc = utils.module_from_file(sp / f"{name}_pb2_grpc.py", f"{name}_pb2_grpc")
             mods[name] = (pb2, pb2_grpc)
 
         return mods
@@ -161,76 +169,9 @@ class SimpleGRPC:
             server: The server receiving the servicers.
         """
         for service in self._handlers:
-            pb2, pb2_grpc = self._find_service(mods, service)
+            pb2, pb2_grpc = utils.find_service(mods, service)
             servicer = self._build_servicer(service, pb2, pb2_grpc)
             getattr(pb2_grpc, f"add_{service}Servicer_to_server")(servicer, server)
-
-    @staticmethod
-    def _module_from_file(path: Path, name: str) -> ModuleType:
-        """
-        Load one Python module from a file path.
-
-        Args:
-            path: File to load, e.g. ``.../route_guide_pb2.py``.
-            name: Module name under which the file is executed.
-
-        Returns:
-            The loaded module.
-        """
-        spec = importlib.util.spec_from_file_location(name, path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        return module
-
-    @staticmethod
-    def _find_service(
-        mods: dict[str, tuple[ModuleType, ModuleType]], service: str
-    ) -> tuple[ModuleType, ModuleType]:
-        """Locate which compiled proto defines a service.
-
-        Args:
-            mods: Mapping returned by :meth:`_load_generated`.
-            service: Service name to search for.
-
-        Returns:
-            The ``(pb2, pb2_grpc)`` modules containing the service.
-
-        Raises:
-            ValueError: If no compiled proto defines the service.
-        """
-        for pb2, pb2_grpc in mods.values():
-            if hasattr(pb2_grpc, f"{service}Servicer"):
-                return pb2, pb2_grpc
-
-        available = [name for pb2, _ in mods.values() for name in pb2.DESCRIPTOR.services_by_name]
-        raise ValueError(
-            f"service {service!r} not found in compiled protos. Available: {available}"
-        )
-
-    @staticmethod
-    def _reply(
-        value: dict[str, Any] | Message | None, response_cls: type[Message]
-    ) -> Message | None:
-        """Convert one handler result into the response message.
-
-        Args:
-            value: A message (passthrough), a dict serialized via
-                ``json_format``, or ``None`` for an empty response.
-            response_cls: Generated message class for the response type.
-
-        Returns:
-            The response ``Message``.
-
-        Raises:
-            TypeError: If the value is neither a dict, a ``Message``, nor ``None``.
-        """
-        if isinstance(value, Message) or value is None:
-            return value
-        if isinstance(value, dict):
-            return json_format.ParseDict(value, response_cls())
-
-        raise TypeError(f"handler returned {type(value).__name__}, expected dict or Message")
 
     @classmethod
     def _wrap_handler(
@@ -239,7 +180,8 @@ class SimpleGRPC:
         response_cls: type[Message],
         dependencies: tuple[Depends, ...] = (),
     ) -> Callable:
-        """Wrap a handler for gRPC dispatch, resolving its declared parameters.
+        """
+        Wrap a handler for gRPC dispatch, resolving its declared parameters.
 
         Injected parameters: ``request``, ``request_iterator``, ``context``
         (by name) and any parameter whose default is a ``Depends``. The
@@ -333,10 +275,10 @@ class SimpleGRPC:
             try:
                 result = handler(**kwargs)
                 if isinstance(result, (Message, dict)) or result is None:
-                    return cls._reply(result, response_cls)
+                    return utils.reply(result, response_cls)
                 # teardown runs before the response stream is consumed;
                 # wire-exact post-yield for streams needs a chained response iterator.
-                return Iterator(cls._reply(item, response_cls) for item in result)
+                return Iterator(utils.reply(item, response_cls) for item in result)
             except GRPCException as exc:
                 # GRPCException raised mid-iteration of a streaming
                 # reply escapes this catch; wrap the iterator if that matters.
@@ -351,7 +293,8 @@ class SimpleGRPC:
     def _resolve(
         cls, fn: Callable, request: Any, context: grpc.ServicerContext
     ) -> tuple[Any, Callable[[], None]]:
-        """Resolve one dependency (and its nested ``Depends`` tree).
+        """
+        Resolve one dependency (and its nested ``Depends`` tree).
 
         Args:
             fn: The dependency function.

@@ -1,5 +1,9 @@
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict
+
+import grpc
 
 
 @dataclass
@@ -44,3 +48,21 @@ class ProtoConfig:
             f"--grpc_python_out={self.service_path}",
             *self.proto_files,
         ]
+
+
+class ServerOptions(TypedDict, total=False):
+    """
+    Keyword args forwarded verbatim to ``grpc.server()`` in :meth:`SimpleGRPC._start`.
+
+    Mirrors the ``grpc.server()`` signature minus ``thread_pool``, which stays a
+    first-class ``SimpleGRPC`` parameter. Kept in sync mechanically by
+    ``tests/test_app.py::test_server_options_stay_in_sync_with_grpc``.
+    """
+
+    handlers: Iterable[grpc.GenericRpcHandler]
+    interceptors: Iterable[grpc.ServerInterceptor]
+    # ChannelArgument only exists in grpc's stubs at type-check time.
+    options: "Sequence[grpc.ChannelArgument]"  # type: ignore[reportAttributeAccessIssue]
+    maximum_concurrent_rpcs: int | None
+    compression: grpc.Compression | None
+    xds: bool
