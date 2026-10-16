@@ -16,6 +16,7 @@ class ProtoConfig:
         Raises:
             ValueError: If a proto stem is not a valid Python module name.
         """
+
         self.service_path = Path(self.service_path or "services").resolve()
         self.proto_path = Path(self.proto_path or "protos").resolve()
 
