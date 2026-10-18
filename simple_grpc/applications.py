@@ -12,7 +12,7 @@ import grpc
 from grpc_tools import protoc
 
 from simple_grpc.exceptions import GRPCException
-from simple_grpc.models import ProtoConfig, ServerOptions
+from simple_grpc.models import ProtoConfig, ServerCredentials, ServerOptions
 from simple_grpc.params import Depends, hints, noop, param_dependency
 import simple_grpc.utils as utils
 
@@ -43,6 +43,7 @@ class SimpleGRPC:
         proto_files: list[str] | None = None,
         service_path: str | Path = "grpc_services",
         port: int = 50051,
+        credentials: ServerCredentials | None = None,
         dependencies: list[Depends] | None = None,
         **server_options: Unpack[ServerOptions],
     ) -> None:
@@ -57,6 +58,10 @@ class SimpleGRPC:
                 in ``proto_path``.
             service_path: Output directory for the generated ``*_pb2*.py``.
             port: Port the server binds with ``dev()``/``run()``.
+            credentials: TLS credentials; each PEM field takes a ``Path`` or
+                the content itself. Given, ``_start`` binds with
+                ``add_secure_port`` (and ``ssl_server_credentials``); absent,
+                the port stays insecure.
             dependencies: App-wide ``Depends`` resolved before every RPC,
                 applied automatically to all handlers. Generator dependencies
                 wrap each call (pre/`yield`/post).
@@ -74,6 +79,7 @@ class SimpleGRPC:
             service_path=service_path,
         )
         self.port = port
+        self.credentials = credentials
         self._handlers: dict[str, dict[str, Callable]] = {}
         self._app_dependencies: tuple[Depends, ...] = tuple(dependencies or ())
         self._server_options: ServerOptions = server_options
@@ -85,7 +91,10 @@ class SimpleGRPC:
         mods = self._load_generated()
         server = grpc.server(self.thread_pool, **self._server_options)
         self._register_services(mods, server)
-        server.add_insecure_port(f"[::]:{self.port}")
+        if self.credentials:
+            server.add_secure_port(f"[::]:{self.port}", self.credentials.to_server_credentials())
+        else:
+            server.add_insecure_port(f"[::]:{self.port}")
         server.start()
         server.wait_for_termination()
 
@@ -172,6 +181,26 @@ class SimpleGRPC:
             pb2, pb2_grpc = utils.find_service(mods, service)
             servicer = self._build_servicer(service, pb2, pb2_grpc)
             getattr(pb2_grpc, f"add_{service}Servicer_to_server")(servicer, server)
+
+    @classmethod
+    def _stream(
+        cls, result, response_cls: type[Message], context: grpc.ServicerContext, tails
+    ) -> Iterator[Any]:
+        """
+        Serialize each item, mapping GRPCException to a status.
+
+        Teardown runs after the last item, so generator
+        dependencies (e.g. DB sessions) stay alive while gRPC
+        consumes the stream.
+        """
+        try:
+            for item in result:
+                yield utils.reply(item, response_cls)
+        except GRPCException as exc:
+            context.abort(exc.code, exc.details)
+        finally:
+            for tail in tails:
+                tail()
 
     @classmethod
     def _wrap_handler(
@@ -272,20 +301,21 @@ class SimpleGRPC:
                 elif name == "context":
                     kwargs[name] = context
 
+            streaming = False
             try:
                 result = handler(**kwargs)
                 if isinstance(result, (Message, dict)) or result is None:
                     return utils.reply(result, response_cls)
-                # teardown runs before the response stream is consumed;
-                # wire-exact post-yield for streams needs a chained response iterator.
-                return Iterator(utils.reply(item, response_cls) for item in result)
+
+                streaming = True
+                return cls._stream(result, response_cls, context, tails)
             except GRPCException as exc:
-                # GRPCException raised mid-iteration of a streaming
-                # reply escapes this catch; wrap the iterator if that matters.
                 context.abort(exc.code, exc.details)
             finally:
-                for tail in tails:
-                    tail()
+                # streaming teardown is owned by stream(); run it exactly once.
+                if not streaming:
+                    for tail in tails:
+                        tail()
 
         return method
 
