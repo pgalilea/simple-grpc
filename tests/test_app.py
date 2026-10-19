@@ -170,7 +170,7 @@ def test_dev_wires_everything(app, mocker):
     def say(request, context):
         return {"message": "ok"}
 
-    app.dev()
+    app.run()
 
     server.add_insecure_port.assert_called_once_with("[::]:50051")
     server.start.assert_called_once()

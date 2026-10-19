@@ -67,9 +67,7 @@ def test_server_credentials_rejects_non_pem():
 
 def test_server_credentials_rejects_mtls_without_roots():
     with pytest.raises(ValueError, match="root_certificates"):
-        ServerCredentials(
-            private_key=PEM_KEY, certificate_chain=PEM_CERT, require_client_auth=True
-        )
+        ServerCredentials(private_key=PEM_KEY, certificate_chain=PEM_CERT, require_client_auth=True)
 
 
 def test_dev_with_credentials_binds_secure(app, mocker, tmp_path):
@@ -87,7 +85,7 @@ def test_dev_with_credentials_binds_secure(app, mocker, tmp_path):
     def say(request, context):
         return {"message": "ok"}
 
-    app.dev()
+    app.run()
 
     server.add_secure_port.assert_called_once_with("[::]:50051", fake_creds)
     server.add_insecure_port.assert_not_called()

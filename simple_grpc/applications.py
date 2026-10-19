@@ -91,10 +91,12 @@ class SimpleGRPC:
         mods = self._load_generated()
         server = grpc.server(self.thread_pool, **self._server_options)
         self._register_services(mods, server)
+
         if self.credentials:
             server.add_secure_port(f"[::]:{self.port}", self.credentials.to_server_credentials())
         else:
             server.add_insecure_port(f"[::]:{self.port}")
+
         server.start()
         server.wait_for_termination()
 
@@ -107,6 +109,8 @@ class SimpleGRPC:
         """
         if not self.proto_config.service_path.exists():
             raise ValueError(f"service_path '{self.proto_config.service_path}' does not exist.")
+        if len(self.proto_config.proto_files) == 0:
+            raise RuntimeError(f"no proto files in directory: {self.proto_config.proto_path}")
         if protoc.main(self.proto_config.to_compiler_args()) != 0:
             raise RuntimeError(f"protoc failed for {self.proto_config.proto_files}")
 
@@ -443,13 +447,53 @@ class SimpleGRPC:
 
         return decorator
 
-    def dev(self) -> None:
-        """Compile the protos, wire the handlers, and serve until killed.
+    def dev(
+        self,
+        reload: bool = True,
+        reload_dirs: list[str | Path] | None = None,
+        reload_excludes: list[str | Path] | None = None,
+    ) -> None:
+        """
+        Serve with hot reload: editing watched files restarts the server.
+
+        The app runs in a spawned child process, rebuilt from its module on
+        every restart (fresh imports, fresh ``protoc`` compile). By default
+        the working directory is watched, excluding the proto and service
+        directories plus the generated ``*_pb2*.py`` (protoc rewrites them
+        at every child start, which would otherwise loop reloads forever).
+
+        Args:
+            reload: Serve in-process like :meth:`run` when False.
+            reload_dirs: Directories to watch; defaults to the working
+                directory.
+            reload_excludes: Extra glob patterns and/or directories to
+                ignore, on top of the defaults (proto/service directories,
+                ``*_pb2.py``/``*_pb2_grpc.py``).
 
         Raises:
-            RuntimeError: If ``protoc`` exits with a non-zero status.
+            ImportError: If ``watchfiles`` is not installed.
+            RuntimeError: If the app is not bound to a module-level
+                variable, or if ``protoc`` exits with a non-zero status.
         """
-        self._start()
+        if not reload:
+            self._start()
+            return
+
+        try:
+            from simple_grpc import reloading
+        except ImportError as exc:
+            raise ImportError(
+                "hot reload requires watchfiles: install it with 'pip install watchfiles'"
+            ) from exc
+
+        module_ref, attr = reloading.locate_app(self, sys._getframe(1))
+        reloading.serve_with_reload(
+            self,
+            module_ref,
+            attr,
+            reload_dirs=reload_dirs,
+            reload_excludes=reload_excludes,
+        )
 
     def run(self) -> None:
         """Serve like :meth:`dev`; compile-skipping is deferred until needed.
