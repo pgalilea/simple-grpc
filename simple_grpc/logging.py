@@ -27,6 +27,28 @@ _LEVEL_STYLES = {
 }
 
 
+def _resolve_level(level: str | int) -> int:
+    """
+    Map a level name or int to its stdlib numeric value.
+
+    Args:
+        level: A level name (``"info"``, ``"WARNING"``, ...) or int.
+
+    Returns:
+        The numeric logging level.
+
+    Raises:
+        ValueError: If a string level is not a valid logging level name.
+    """
+    if isinstance(level, int):
+        return level
+    try:
+        return logging.getLevelNamesMapping()[level.upper()]
+    except KeyError:
+        valid = ", ".join(logging.getLevelNamesMapping())
+        raise ValueError(f"invalid log_level {level!r}; valid names: {valid}") from None
+
+
 def use_colors() -> bool:
     """
     Decide whether ANSI styling should be emitted.
@@ -55,28 +77,6 @@ def style(text: str, colors: bool, **kwargs: Any) -> str:
         The styled text, or ``text`` unchanged when colors are off.
     """
     return click.style(text, **kwargs) if colors else text
-
-
-def _resolve_level(level: str | int) -> int:
-    """
-    Map a level name or int to its stdlib numeric value.
-
-    Args:
-        level: A level name (``"info"``, ``"WARNING"``, ...) or int.
-
-    Returns:
-        The numeric logging level.
-
-    Raises:
-        ValueError: If a string level is not a valid logging level name.
-    """
-    if isinstance(level, int):
-        return level
-    try:
-        return logging.getLevelNamesMapping()[level.upper()]
-    except KeyError:
-        valid = ", ".join(logging.getLevelNamesMapping())
-        raise ValueError(f"invalid log_level {level!r}; valid names: {valid}") from None
 
 
 @dataclass
@@ -154,29 +154,30 @@ def configure_logging(config: LoggingConfig) -> None:
         lg.setLevel(config.log_level)
         lg.propagate = False
 
+    # stdlib kill switch; owns the access_log knob instead of threading it.
+    access_logger.disabled = not config.access_log
+
 
 def log_access(
-    logger: logging.Logger,
-    enabled: bool,
     context: grpc.ServicerContext,
     path: str,
     code: grpc.StatusCode,
 ) -> None:
     """
-    Emit one access log line; no-op when disabled.
+    Emit one access log line through ``access_logger``; no-op when the
+    logger is disabled (``configure_logging`` sets ``disabled`` from
+    ``LoggingConfig.access_log``).
 
     Args:
-        lg: The logger to emit through (``simple_grpc.access``).
-        enabled: Whether access logging is on (``LoggingConfig.access_log``).
         context: The servicer context, for the client peer address.
         path: Full gRPC method path (``/pkg.Service/Method``).
         code: The gRPC status the RPC finished with.
     """
-    if not enabled:
+    if access_logger.disabled:
         return
 
     peer = context.peer()
     if isinstance(peer, str):
         peer = unquote(peer)
 
-    logger.info('%s - "POST %s HTTP/2.0" %s', peer, path, code.name)
+    access_logger.info('%s - "POST %s HTTP/2.0" %s', peer, path, code.name)

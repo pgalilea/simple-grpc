@@ -44,18 +44,19 @@ def app(tmp_path):
 def clean_loggers():
     """Reset the framework loggers around a test so user state never leaks."""
     saved = [
-        (lg.handlers[:], lg.level, lg.propagate)
+        (lg.handlers[:], lg.level, lg.propagate, lg.disabled)
         for lg in (sg_logging.logger, sg_logging.access_logger)
     ]
     for lg in (sg_logging.logger, sg_logging.access_logger):
         lg.handlers.clear()
     yield
-    for lg, (handlers, level, propagate) in zip(
+    for lg, (handlers, level, propagate, disabled) in zip(
         (sg_logging.logger, sg_logging.access_logger), saved, strict=True
     ):
         lg.handlers[:] = handlers
         lg.level = level
         lg.propagate = propagate
+        lg.disabled = disabled
 
 
 def rendered(mock_logger):
@@ -104,7 +105,7 @@ def test_access_log_success(app, mocker):
         return {"message": request.message}
 
     servicer = app._build_servicer("Echo", pb2, pb2_grpc)
-    access = mocker.patch("simple_grpc.applications.access_logger")
+    access = mocker.patch("simple_grpc.logging.access_logger", disabled=False)
     context = mocker.Mock()
     context.peer.return_value = "ipv4:1.2.3.4:5"
 
@@ -123,7 +124,7 @@ def test_access_log_grpc_exception(app, mocker):
     app._compile()
     pb2, pb2_grpc = app._load_generated()["demo"]
     servicer = app._build_servicer("Echo", pb2, pb2_grpc)
-    access = mocker.patch("simple_grpc.applications.access_logger")
+    access = mocker.patch("simple_grpc.logging.access_logger", disabled=False)
     context = mocker.Mock()
     context.abort.side_effect = RuntimeError("abort raises")  # like real grpc
 
@@ -143,7 +144,7 @@ def test_access_log_unknown_exception(app, mocker):
     app._compile()
     pb2, pb2_grpc = app._load_generated()["demo"]
     servicer = app._build_servicer("Echo", pb2, pb2_grpc)
-    access = mocker.patch("simple_grpc.applications.access_logger")
+    access = mocker.patch("simple_grpc.logging.access_logger", disabled=False)
 
     with pytest.raises(RuntimeError, match="boom"):
         servicer.Say(pb2.EchoRequest(), mocker.Mock())
@@ -156,7 +157,7 @@ def test_access_log_unknown_exception(app, mocker):
 def test_access_log_streaming(app, mocker):
     """A streaming RPC logs OK once gRPC consumes the whole stream."""
     items = iter([None, None])
-    access = mocker.patch("simple_grpc.applications.access_logger")
+    access = mocker.patch("simple_grpc.logging.access_logger", disabled=False)
     context = mocker.Mock()
     context.peer.return_value = "ipv4:1.2.3.4:5"
 
@@ -217,6 +218,16 @@ def test_configure_logging_applies_level(clean_loggers):
     assert sg_logging.access_logger.level == logging.WARNING
 
 
+def test_configure_logging_applies_access_switch(clean_loggers):
+    """access_log drives the access logger's stdlib disabled flag, both ways."""
+    sg_logging.configure_logging(LoggingConfig(access_log=False))
+    assert sg_logging.access_logger.disabled is True
+
+    sg_logging.configure_logging(LoggingConfig(access_log=True))
+    assert sg_logging.access_logger.disabled is False
+    assert not sg_logging.logger.disabled
+
+
 def test_logging_config_defaults():
     """Defaults: access on, INFO, auto-detected colors."""
     config = LoggingConfig()
@@ -250,17 +261,16 @@ def test_style_forced_colors():
 
 
 def test_access_log_disabled(app, mocker):
-    """access_log=False silences per-RPC lines entirely."""
+    """A disabled access logger silences per-RPC lines entirely."""
 
     @app.rpc("Echo", "Say")
     def say(request, context):
         return {"message": "x"}
 
-    app.logging_config = LoggingConfig(access_log=False)
     app._compile()
     pb2, pb2_grpc = app._load_generated()["demo"]
     servicer = app._build_servicer("Echo", pb2, pb2_grpc)
-    access = mocker.patch("simple_grpc.applications.access_logger")
+    access = mocker.patch("simple_grpc.logging.access_logger", disabled=True)
 
     servicer.Say(pb2.EchoRequest(), mocker.Mock())
 
@@ -268,14 +278,11 @@ def test_access_log_disabled(app, mocker):
 
 
 def test_access_log_disabled_streaming(app, mocker):
-    """access_log=False also silences the streaming completion line."""
-    app.logging_config = LoggingConfig(access_log=False)
-    access = mocker.patch("simple_grpc.applications.access_logger")
+    """A disabled access logger also silences the streaming completion line."""
+    access = mocker.patch("simple_grpc.logging.access_logger", disabled=True)
 
     out = list(
-        SimpleGRPC._stream(
-            iter([None]), mocker.sentinel.cls, mocker.Mock(), [], path="/x", access_log=False
-        )
+        SimpleGRPC._stream(iter([None]), mocker.sentinel.cls, mocker.Mock(), [], path="/x")
     )
 
     assert out == [None]

@@ -1,6 +1,5 @@
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
-import inspect
 import os
 from pathlib import Path
 import sys
@@ -12,17 +11,15 @@ from google.protobuf.message import Message
 import grpc
 from grpc_tools import protoc
 
-from simple_grpc.exceptions import GRPCException
+import simple_grpc.dispatch as dispatch
 from simple_grpc.logging import (
     LoggingConfig,
-    access_logger,
     configure_logging,
-    log_access,
     logger,
     style,
 )
 from simple_grpc.models import ProtoConfig, ServerCredentials, ServerOptions
-from simple_grpc.params import Depends, hints, noop, param_dependency
+from simple_grpc.params import INJECTABLE, Depends
 import simple_grpc.utils as utils
 
 
@@ -43,10 +40,11 @@ class SimpleGRPC:
     """
 
     # Parameter names a handler may declare for dependency injection.
-    INJECTABLE = ("request", "request_iterator", "context")
+    INJECTABLE = INJECTABLE  # just for compatibility
 
     def __init__(
         self,
+        *,
         thread_pool: ThreadPoolExecutor | None = None,
         proto_path: str | Path = "protos",
         proto_files: list[str] | None = None,
@@ -196,7 +194,6 @@ class SimpleGRPC:
                 message_factory.GetMessageClass(methods[name].output_type),
                 self._app_dependencies,
                 path=f"/{prefix}/{name}",
-                access_log=self.logging_config.access_log,
             )
             for name, handler in handlers.items()
         }
@@ -225,38 +222,9 @@ class SimpleGRPC:
         context: grpc.ServicerContext,
         tails,
         path: str = "",
-        access_log: bool = True,
     ) -> Iterator[Any]:
-        """
-        Serialize each item, mapping GRPCException to a status.
-
-        Teardown runs after the last item, so generator
-        dependencies (e.g. DB sessions) stay alive while gRPC
-        consumes the stream.
-
-        Logs one access line when the stream finishes.
-
-        Args:
-            result: The handler's return value, iterated for stream items.
-            response_cls: Generated message class for the RPC's response type.
-            context: gRPC servicer context.
-            tails: Post-call teardowns, run after the last item.
-            path: Full gRPC method path for the access log.
-            access_log: Whether to emit the access line.
-        """
-        try:
-            for item in result:
-                yield utils.reply(item, response_cls)
-            log_access(access_logger, access_log, context, path, grpc.StatusCode.OK)
-        except GRPCException as exc:
-            log_access(access_logger, access_log, context, path, exc.code)
-            context.abort(exc.code, exc.details)
-        except Exception:
-            log_access(access_logger, access_log, context, path, grpc.StatusCode.UNKNOWN)
-            raise
-        finally:
-            for tail in tails:
-                tail()
+        """Delegate to :func:`simple_grpc.dispatch.stream`."""
+        return dispatch.stream(result, response_cls, context, tails, path=path)
 
     @classmethod
     def _wrap_handler(
@@ -265,197 +233,9 @@ class SimpleGRPC:
         response_cls: type[Message],
         dependencies: tuple[Depends, ...] = (),
         path: str = "",
-        access_log: bool = True,
     ) -> Callable:
-        """
-        Wrap a handler for gRPC dispatch, resolving its declared parameters.
-
-        Injected parameters: ``request``, ``request_iterator``, ``context``
-        (by name) and any parameter whose default is a ``Depends``. The
-        ``dependencies`` are resolved as side-effect dependencies before the
-        handler runs; generator dependencies run their remainder afterwards.
-
-        Args:
-            handler: The user-registered handler.
-            response_cls: Generated message class for the RPC's response type.
-            dependencies: App-wide ``Depends`` for this handler,
-                resolved before (outside) the signature dependencies.
-            path: Full gRPC method path (``/pkg.Service/Method``) for the
-                access log.
-            access_log: Whether to emit the access line.
-
-        Returns:
-            The servicer method that gRPC invokes for this RPC.
-
-        Raises:
-            ValueError: If the handler or a dependency declares a
-                non-injectable and non-``Depends`` parameter.
-        """
-        params = inspect.signature(handler).parameters
-        fn_hints = hints(handler)
-        unknown = sorted(
-            name
-            for name, param in params.items()
-            if name not in cls.INJECTABLE
-            and param_dependency(param, fn_hints.get(name, param.annotation)) is None
-        )
-        if unknown:
-            raise ValueError(
-                f"handler {handler.__name__!r} declares unregistrable parameter(s) "
-                f"{unknown}; injectable names: {list(cls.INJECTABLE)} or "
-                f"Depends(dependency) defaults"
-            )
-        handler_deps = [
-            dep
-            for param in params.values()
-            for dep in [param_dependency(param, fn_hints.get(param.name, param.annotation))]
-            if dep is not None
-        ]
-
-        for dep in (*handler_deps, *dependencies):
-            cls._validate_dependency(dep.dependency)
-
-        def method(self: Any, request: Any, context: grpc.ServicerContext) -> Any:
-            """Dispatch to the user handler with its dependencies resolved.
-
-            Args:
-                self: The servicer instance (unused, required by gRPC).
-                request: Request message, or the request iterator on streams.
-                context: gRPC servicer context.
-
-            Returns:
-                Whatever the handler returns, serialized for the wire.
-
-            Raises:
-                Exception: Any exception from the handler or dependencies.
-                    ``GRPCException`` subclasses abort the RPC with their
-                    status code and details; other exceptions propagate for
-                    gRPC to map to ``UNKNOWN`` (dependencies may also call
-                    ``context.abort`` for a specific status code).
-            """
-            tails: list[Callable[[], None]] = []
-
-            def resolve(fn: Callable) -> Any:
-                """Resolve one dependency, queueing its post-call teardown.
-
-                Args:
-                    fn: The dependency function.
-
-                Returns:
-                    The value the dependency produced (``None`` for side
-                    effect / generator-only dependencies).
-                """
-                value, tail = cls._resolve(fn, request, context)
-                tails.append(tail)
-                return value
-
-            for dep in dependencies:
-                resolve(dep.dependency)
-
-            kwargs: dict[str, Any] = {}
-            for name, param in params.items():
-                dep = param_dependency(param, fn_hints.get(name, param.annotation))
-                if dep is not None:
-                    kwargs[name] = resolve(dep.dependency)
-                elif name == "request" or name == "request_iterator":
-                    kwargs[name] = request
-                elif name == "context":
-                    kwargs[name] = context
-
-            streaming = False
-            try:
-                result = handler(**kwargs)
-                if isinstance(result, (Message, dict)) or result is None:
-                    log_access(access_logger, access_log, context, path, grpc.StatusCode.OK)
-                    return utils.reply(result, response_cls)
-
-                streaming = True
-                return cls._stream(
-                    result, response_cls, context, tails, path=path, access_log=access_log
-                )
-            except GRPCException as exc:
-                log_access(access_logger, access_log, context, path, exc.code)
-                context.abort(exc.code, exc.details)
-            except Exception:
-                log_access(access_logger, access_log, context, path, grpc.StatusCode.UNKNOWN)
-                raise
-            finally:
-                # streaming teardown is owned by stream(); run it exactly once.
-                if not streaming:
-                    for tail in tails:
-                        tail()
-
-        return method
-
-    @classmethod
-    def _resolve(
-        cls, fn: Callable, request: Any, context: grpc.ServicerContext
-    ) -> tuple[Any, Callable[[], None]]:
-        """
-        Resolve one dependency (and its nested ``Depends`` tree).
-
-        Args:
-            fn: The dependency function.
-            request: Request message, or the request iterator on streams.
-            context: gRPC servicer context.
-
-        Returns:
-            A ``(value, tail)`` pair: the value to inject, and a callable
-            running the dependency's post-handler remainder (a generator
-            tail, a no-op for plain functions).
-
-        Raises:
-            StopIteration: If a generator dependency yields before any value.
-        """
-        kwargs: dict[str, Any] = {}
-        fn_hints = hints(fn)
-        for name, param in inspect.signature(fn).parameters.items():
-            dep = param_dependency(param, fn_hints.get(name, param.annotation))
-            if dep is not None:
-                kwargs[name], _ = cls._resolve(dep.dependency, request, context)
-            elif name == "request" or name == "request_iterator":
-                kwargs[name] = request
-            elif name == "context":
-                kwargs[name] = context
-
-        if not inspect.isgeneratorfunction(fn):
-            return fn(**kwargs), noop
-
-        def tail() -> None:
-            """Drain the generator, running everything after its ``yield``."""
-            for _ in gen:
-                pass
-
-        gen = fn(**kwargs)
-
-        return next(gen), tail
-
-    @classmethod
-    def _validate_dependency(cls, fn: Callable, seen: frozenset[Callable] = frozenset()) -> None:
-        """Recursively validate that a dependency declares only injectables.
-
-        Args:
-            fn: The dependency function to validate.
-            seen: Already-visited dependencies, guarding against cycles.
-
-        Raises:
-            ValueError: If the dependency declares a non-injectable and
-                non-``Depends`` parameter.
-        """
-        if fn in seen:
-            return
-        fn_hints = hints(fn)
-
-        for name, param in inspect.signature(fn).parameters.items():
-            dep = param_dependency(param, fn_hints.get(name, param.annotation))
-            if dep is not None:
-                cls._validate_dependency(dep.dependency, seen | {fn})
-            elif name not in cls.INJECTABLE:
-                raise ValueError(
-                    f"dependency {fn.__name__!r} declares unregistrable parameter(s) "
-                    f"[{name!r}]; injectable names: {list(cls.INJECTABLE)} or "
-                    f"Depends(dependency) defaults"
-                )
+        """Delegate to :func:`simple_grpc.dispatch.wrap_handler`."""
+        return dispatch.wrap_handler(handler, response_cls, dependencies=dependencies, path=path)
 
     def config_proto_files(
         self,
@@ -540,6 +320,7 @@ class SimpleGRPC:
                 variable, or if ``protoc`` exits with a non-zero status.
         """
         configure_logging(self.logging_config)
+
         if not reload:
             self._start()
             return

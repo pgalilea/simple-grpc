@@ -34,6 +34,10 @@ class Depends:
     dependency: Callable[..., Any]
 
 
+# Parameter names a handler or dependency may declare for injection.
+INJECTABLE = ("request", "request_iterator", "context")
+
+
 def noop() -> None:
     """No-op teardown for plain-function dependencies."""
     return None

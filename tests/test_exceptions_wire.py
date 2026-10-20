@@ -19,10 +19,9 @@ def test_grpc_exception_aborts_with_code_and_details(mocker):
     context.abort.side_effect = RuntimeError("abort raises")  # like real grpc
 
     with pytest.raises(RuntimeError):
-        method(self=None, request=mocker.sentinel.req, context=context)
+        method(request=mocker.sentinel.req, context=context)
 
     context.abort.assert_called_once_with(NotFoundError.code, "no user 5")
-
 
 def test_grpc_exception_teardown_still_runs(mocker):
     """Generator dependency teardown runs even when the handler aborts."""
@@ -40,7 +39,7 @@ def test_grpc_exception_teardown_still_runs(mocker):
     context.abort.side_effect = RuntimeError("abort raises")
 
     with pytest.raises(RuntimeError):
-        method(self=None, request=mocker.sentinel.req, context=context)
+        method(request=mocker.sentinel.req, context=context)
 
     assert ran == [True]
 
@@ -56,7 +55,7 @@ def test_non_grpc_exception_not_converted(mocker):
     context = mocker.Mock()
 
     with pytest.raises(RuntimeError) as err:
-        method(self=None, request=mocker.sentinel.req, context=context)
+        method(request=mocker.sentinel.req, context=context)
 
     assert err.value is expected
     context.abort.assert_not_called()
