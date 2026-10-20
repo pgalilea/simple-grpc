@@ -125,8 +125,9 @@ def test_request_iterator_alias(app, mocker):
     pb2, pb2_grpc = app._load_generated()["demo"]
     servicer = app._build_servicer("Echo", pb2, pb2_grpc)
 
-    request = pb2.EchoRequest()
-    response = servicer.Say(request, request)
+    # one Mock injected as both request_iterator and context: the alias contract
+    both = mocker.Mock()
+    response = servicer.Say(both, both)
     assert response.message == "alias"
 
 

@@ -1,6 +1,7 @@
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 import inspect
+import os
 from pathlib import Path
 import sys
 from types import ModuleType
@@ -12,6 +13,14 @@ import grpc
 from grpc_tools import protoc
 
 from simple_grpc.exceptions import GRPCException
+from simple_grpc.logging import (
+    LoggingConfig,
+    access_logger,
+    configure_logging,
+    log_access,
+    logger,
+    style,
+)
 from simple_grpc.models import ProtoConfig, ServerCredentials, ServerOptions
 from simple_grpc.params import Depends, hints, noop, param_dependency
 import simple_grpc.utils as utils
@@ -43,8 +52,9 @@ class SimpleGRPC:
         proto_files: list[str] | None = None,
         service_path: str | Path = "grpc_services",
         port: int = 50051,
-        credentials: ServerCredentials | None = None,
         dependencies: list[Depends] | None = None,
+        credentials: ServerCredentials | None = None,
+        logging_config: LoggingConfig | None = None,
         **server_options: Unpack[ServerOptions],
     ) -> None:
         """
@@ -58,10 +68,12 @@ class SimpleGRPC:
                 in ``proto_path``.
             service_path: Output directory for the generated ``*_pb2*.py``.
             port: Port the server binds with ``dev()``/``run()``.
-            credentials: TLS credentials; each PEM field takes a ``Path`` or
+        credentials: TLS credentials; each PEM field takes a ``Path`` or
                 the content itself. Given, ``_start`` binds with
                 ``add_secure_port`` (and ``ssl_server_credentials``); absent,
                 the port stays insecure.
+            logging_config: Logging knobs (access log, level, colors);
+                defaults to ``LoggingConfig()``.
             dependencies: App-wide ``Depends`` resolved before every RPC,
                 applied automatically to all handlers. Generator dependencies
                 wrap each call (pre/`yield`/post).
@@ -80,6 +92,7 @@ class SimpleGRPC:
         )
         self.port = port
         self.credentials = credentials
+        self.logging_config = logging_config or LoggingConfig()
         self._handlers: dict[str, dict[str, Callable]] = {}
         self._app_dependencies: tuple[Depends, ...] = tuple(dependencies or ())
         self._server_options: ServerOptions = server_options
@@ -87,17 +100,31 @@ class SimpleGRPC:
     def _start(self) -> None:
         """Compile, load generated modules, register services, and serve."""
 
+        configure_logging(self.logging_config)
+        logger.info("Starting simple_grpc (pid %s)", os.getpid())
         self._compile()
+        proto = self.proto_config
+        logger.info(
+            "Compiled %d proto file(s) from '%s' into '%s'",
+            len(proto.proto_files),
+            proto.proto_path,
+            proto.service_path,
+        )
         mods = self._load_generated()
         server = grpc.server(self.thread_pool, **self._server_options)
         self._register_services(mods, server)
+        services = ", ".join(f"{svc} ({', '.join(m)})" for svc, m in self._handlers.items())
+        logger.info("Registered services: %s", services or "(none)")
 
         if self.credentials:
             server.add_secure_port(f"[::]:{self.port}", self.credentials.to_server_credentials())
+            tls = "(TLS)"
         else:
             server.add_insecure_port(f"[::]:{self.port}")
+            tls = f"({style('No', self.logging_config.use_colors, bold=True)} TLS)"
 
         server.start()
+        logger.info("Serving on [::]:%d %s — press CTRL+C to quit", self.port, tls)
         server.wait_for_termination()
 
     def _compile(self) -> None:
@@ -161,11 +188,15 @@ class SimpleGRPC:
             )
 
         methods = pb2.DESCRIPTOR.services_by_name[service].methods_by_name
+        package = pb2.DESCRIPTOR.package
+        prefix = f"{package}.{service}" if package else service
         overrides = {
             name: self._wrap_handler(
                 handler,
                 message_factory.GetMessageClass(methods[name].output_type),
                 self._app_dependencies,
+                path=f"/{prefix}/{name}",
+                access_log=self.logging_config.access_log,
             )
             for name, handler in handlers.items()
         }
@@ -188,7 +219,13 @@ class SimpleGRPC:
 
     @classmethod
     def _stream(
-        cls, result, response_cls: type[Message], context: grpc.ServicerContext, tails
+        cls,
+        result,
+        response_cls: type[Message],
+        context: grpc.ServicerContext,
+        tails,
+        path: str = "",
+        access_log: bool = True,
     ) -> Iterator[Any]:
         """
         Serialize each item, mapping GRPCException to a status.
@@ -196,12 +233,27 @@ class SimpleGRPC:
         Teardown runs after the last item, so generator
         dependencies (e.g. DB sessions) stay alive while gRPC
         consumes the stream.
+
+        Logs one access line when the stream finishes.
+
+        Args:
+            result: The handler's return value, iterated for stream items.
+            response_cls: Generated message class for the RPC's response type.
+            context: gRPC servicer context.
+            tails: Post-call teardowns, run after the last item.
+            path: Full gRPC method path for the access log.
+            access_log: Whether to emit the access line.
         """
         try:
             for item in result:
                 yield utils.reply(item, response_cls)
+            log_access(access_logger, access_log, context, path, grpc.StatusCode.OK)
         except GRPCException as exc:
+            log_access(access_logger, access_log, context, path, exc.code)
             context.abort(exc.code, exc.details)
+        except Exception:
+            log_access(access_logger, access_log, context, path, grpc.StatusCode.UNKNOWN)
+            raise
         finally:
             for tail in tails:
                 tail()
@@ -212,6 +264,8 @@ class SimpleGRPC:
         handler: Callable,
         response_cls: type[Message],
         dependencies: tuple[Depends, ...] = (),
+        path: str = "",
+        access_log: bool = True,
     ) -> Callable:
         """
         Wrap a handler for gRPC dispatch, resolving its declared parameters.
@@ -226,6 +280,9 @@ class SimpleGRPC:
             response_cls: Generated message class for the RPC's response type.
             dependencies: App-wide ``Depends`` for this handler,
                 resolved before (outside) the signature dependencies.
+            path: Full gRPC method path (``/pkg.Service/Method``) for the
+                access log.
+            access_log: Whether to emit the access line.
 
         Returns:
             The servicer method that gRPC invokes for this RPC.
@@ -309,12 +366,19 @@ class SimpleGRPC:
             try:
                 result = handler(**kwargs)
                 if isinstance(result, (Message, dict)) or result is None:
+                    log_access(access_logger, access_log, context, path, grpc.StatusCode.OK)
                     return utils.reply(result, response_cls)
 
                 streaming = True
-                return cls._stream(result, response_cls, context, tails)
+                return cls._stream(
+                    result, response_cls, context, tails, path=path, access_log=access_log
+                )
             except GRPCException as exc:
+                log_access(access_logger, access_log, context, path, exc.code)
                 context.abort(exc.code, exc.details)
+            except Exception:
+                log_access(access_logger, access_log, context, path, grpc.StatusCode.UNKNOWN)
+                raise
             finally:
                 # streaming teardown is owned by stream(); run it exactly once.
                 if not streaming:
@@ -475,6 +539,7 @@ class SimpleGRPC:
             RuntimeError: If the app is not bound to a module-level
                 variable, or if ``protoc`` exits with a non-zero status.
         """
+        configure_logging(self.logging_config)
         if not reload:
             self._start()
             return

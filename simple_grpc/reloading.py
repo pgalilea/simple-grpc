@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 from fnmatch import fnmatch
 import importlib
+import logging
 from pathlib import Path
 import runpy
 from types import FrameType
@@ -13,6 +14,9 @@ from watchfiles import Change, DefaultFilter, run_process
 
 if TYPE_CHECKING:
     from simple_grpc.applications import SimpleGRPC
+
+
+logger = logging.getLogger("simple_grpc.error")
 
 
 class SourceFilter(DefaultFilter):
@@ -147,7 +151,12 @@ def serve_with_reload(
     Returns:
         The number of reloads performed (see ``watchfiles.run_process``).
     """
+
     proto = app.proto_config
+    logger.info(
+        "Hot reload enabled, watching directories: %s",
+        (reload_dirs or [str(Path.cwd())]),
+    )
     return run_process(
         *(reload_dirs or (Path.cwd(),)),
         target=serve_in_child,
@@ -159,9 +168,9 @@ def serve_with_reload(
 
 def _log_changes(changes: set[tuple[Change, str]]) -> None:
     """
-    Print which files triggered a reload.
+    Log which files triggered a reload.
 
     Args:
         changes: The changes watchfiles reported for this reload.
     """
-    print(f"Reloading due to changes in: {', '.join(str(path) for _, path in changes)}")
+    logger.info("Reloading due to changes in: %s", ", ".join(str(path) for _, path in changes))
