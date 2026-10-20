@@ -1,8 +1,8 @@
 """Client for dev_server.py: imports the generated modules from the tmp dir."""
 
+from pathlib import Path
 import sys
 import tempfile
-from pathlib import Path
 
 import grpc
 
@@ -10,8 +10,8 @@ import grpc
 sp = Path(tempfile.gettempdir()) / "simple_grpc_example_1"
 sys.path.insert(0, str(sp))
 
-import greeter_pb2 as pb2  # noqa: E402
-from greeter_pb2_grpc import CalculatorStub, GreeterStub  # noqa: E402
+import greeter_pb2 as pb2  # type: ignore # noqa: E402
+from greeter_pb2_grpc import CalculatorStub, GreeterStub  # type: ignore # noqa: E402
 
 
 with grpc.insecure_channel("localhost:50052") as channel:

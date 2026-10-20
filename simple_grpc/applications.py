@@ -92,6 +92,7 @@ class SimpleGRPC:
         self.credentials = credentials
         self.logging_config = logging_config or LoggingConfig()
         self._handlers: dict[str, dict[str, Callable]] = {}
+        self._schemaless_handlers: dict[str, dict[str, Callable]] = {}
         self._app_dependencies: tuple[Depends, ...] = tuple(dependencies or ())
         self._server_options: ServerOptions = server_options
 
@@ -100,18 +101,22 @@ class SimpleGRPC:
 
         configure_logging(self.logging_config)
         logger.info("Starting simple_grpc (pid %s)", os.getpid())
-        self._compile()
-        proto = self.proto_config
-        logger.info(
-            "Compiled %d proto file(s) from '%s' into '%s'",
-            len(proto.proto_files),
-            proto.proto_path,
-            proto.service_path,
-        )
-        mods = self._load_generated()
+        mods: dict[str, tuple[ModuleType, ModuleType]] = {}
+        if self._handlers:
+            self._compile()
+            proto = self.proto_config
+            logger.info(
+                "Compiled %d proto file(s) from '%s' into '%s'",
+                len(proto.proto_files),
+                proto.proto_path,
+                proto.service_path,
+            )
+            mods = self._load_generated()
         server = grpc.server(self.thread_pool, **self._server_options)
         self._register_services(mods, server)
-        services = ", ".join(f"{svc} ({', '.join(m)})" for svc, m in self._handlers.items())
+        self._register_schemaless(server)
+        registered = {**self._handlers, **self._schemaless_handlers}
+        services = ", ".join(f"{svc} ({', '.join(m)})" for svc, m in registered.items())
         logger.info("Registered services: %s", services or "(none)")
 
         if self.credentials:
@@ -135,7 +140,11 @@ class SimpleGRPC:
         if not self.proto_config.service_path.exists():
             raise ValueError(f"service_path '{self.proto_config.service_path}' does not exist.")
         if len(self.proto_config.proto_files) == 0:
-            raise RuntimeError(f"no proto files in directory: {self.proto_config.proto_path}")
+            raise RuntimeError(
+                f"no proto files in directory: {self.proto_config.proto_path} — "
+                f"proto-backed @app.rpc handlers require a .proto file; or use "
+                f"@app.schemaless_rpc for endpoints without a schema"
+            )
         if protoc.main(self.proto_config.to_compiler_args()) != 0:
             raise RuntimeError(f"protoc failed for {self.proto_config.proto_files}")
 
@@ -214,6 +223,26 @@ class SimpleGRPC:
             servicer = self._build_servicer(service, pb2, pb2_grpc)
             getattr(pb2_grpc, f"add_{service}Servicer_to_server")(servicer, server)
 
+    def _register_schemaless(self, server: grpc.Server) -> None:
+        """
+        Attach one generic RPC handler per schemaless service.
+
+        Args:
+            server: The server receiving the generic RPC handlers.
+        """
+        for service, methods in self._schemaless_handlers.items():
+            method_handlers = {
+                name: dispatch.schemaless_method_handler(
+                    handler,
+                    dependencies=self._app_dependencies,
+                    path=f"/{service}/{name}",
+                )
+                for name, handler in methods.items()
+            }
+            server.add_generic_rpc_handlers(
+                (grpc.method_handlers_generic_handler(service, method_handlers),)
+            )
+
     @classmethod
     def _stream(
         cls,
@@ -259,6 +288,18 @@ class SimpleGRPC:
             service_path=service_path,
         )
 
+    @property
+    def protos(self) -> dict[str, str]:
+        """
+        Raw content of every configured ``.proto`` file, keyed by file name.
+
+        Read on access, so edits to the proto files show up under hot reload.
+        """
+        return {
+            pf: (self.proto_config.proto_path / pf).read_text(encoding="utf-8")
+            for pf in self.proto_config.proto_files
+        }
+
     def rpc(
         self,
         service: str,
@@ -287,6 +328,51 @@ class SimpleGRPC:
                 The same function, unchanged.
             """
             self._handlers.setdefault(service, {})[method] = func
+            return func
+
+        return decorator
+
+    def schemaless_rpc(
+        self,
+        service: str,
+        method: str,
+    ) -> Callable[[Callable], Callable]:
+        """
+        Decorate a function as the handler for one RPC, with no proto schema.
+
+        The endpoint is served without any ``.proto`` definition, using
+        ``google.protobuf.Struct`` as the wire format on both sides: the
+        handler receives the request as a plain dict and returns a plain
+        dict (or a ``Struct`` message, or ``None``), exactly like the dict
+        contract of :meth:`rpc`.
+
+        The RPC flavor is inferred from the handler shape: declaring
+        ``request_iterator`` makes it request-streaming; being a generator
+        function (or annotating an ``Iterator``/``Generator``/``Iterable``
+        return) makes it response-streaming; anything else is unary.
+        Dependencies may be declared via ``Depends(...)`` parameter
+        defaults, like :meth:`rpc`.
+
+        Args:
+            service: Service name as clients address it, e.g.
+                ``"Greeter"`` or a dotted ``"pkg.Greeter"``. The full method
+                path is ``/{service}/{method}``.
+            method: RPC method name within the service.
+
+        Returns:
+            A decorator that registers the function and returns it unchanged.
+        """
+
+        def decorator(func: Callable) -> Callable:
+            """Register ``func`` under ``(service, method)``.
+
+            Args:
+                func: The decorated handler function.
+
+            Returns:
+                The same function, unchanged.
+            """
+            self._schemaless_handlers.setdefault(service, {})[method] = func
             return func
 
         return decorator

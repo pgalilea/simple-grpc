@@ -1,11 +1,13 @@
 """Handler dispatch: wrap registered handlers into gRPC servicer methods."""
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator
 from functools import partial
 import inspect
-from typing import Any
+from typing import Any, get_origin
 
+from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import Message
+from google.protobuf.struct_pb2 import Struct
 import grpc
 
 from simple_grpc.exceptions import GRPCException
@@ -247,6 +249,88 @@ def validate_dependency(fn: Callable, seen: frozenset[Callable] = frozenset()) -
                 f"[{name!r}]; injectable names: {list(INJECTABLE)} or "
                 f"Depends(dependency) defaults"
             )
+
+
+def _to_dict(request: Any) -> Any:
+    """
+    Convert an inbound request from ``Struct`` wire format to plain dicts.
+
+    Args:
+        request: A ``Struct`` (unary) or an iterator of ``Struct``
+            (request-streaming).
+
+    Returns:
+        A plain dict, or an iterator of plain dicts.
+    """
+    if isinstance(request, Struct):
+        return MessageToDict(request)
+    return (MessageToDict(message) for message in request)
+
+
+def _is_response_stream(handler: Callable) -> bool:
+    """
+    Decide whether a schemaless handler streams its responses.
+
+    A handler streams when it is a generator function or its return
+    annotation is an ``Iterator``/``Generator``/``Iterable`` — mirroring how
+    :func:`dispatch` routes non-message results at call time.
+
+    Args:
+        handler: The user-registered handler.
+
+    Returns:
+        True when the RPC should be registered as response-streaming.
+    """
+    if inspect.isgeneratorfunction(handler):
+        return True
+    origin = get_origin(hints(handler).get("return"))
+    return origin in (Iterator, Generator, Iterable)
+
+
+def schemaless_method_handler(
+    handler: Callable,
+    dependencies: tuple[Depends, ...] = (),
+    path: str = "",
+) -> grpc.RpcMethodHandler:
+    """
+    Wrap a schemaless handler into a ``grpc.RpcMethodHandler``.
+
+    The wire format is ``google.protobuf.Struct`` on both sides: requests
+    arrive as ``Struct`` and are handed to the handler as plain dicts;
+    returned dicts are serialized back as ``Struct`` (a returned ``Struct``
+    message passes through untouched). The RPC flavor is inferred from the
+    handler shape: declaring ``request_iterator`` makes it request-streaming;
+    being a generator function (or annotating an ``Iterator``/``Generator``/
+    ``Iterable`` return) makes it response-streaming. Any other flavor is
+    unary — annotate streaming returns, or the RPC breaks at call time.
+
+    Args:
+        handler: The user-registered handler.
+        dependencies: App-wide ``Depends`` for this handler,
+            resolved before (outside) the signature dependencies.
+        path: Full gRPC method path (``/Service/Method``) for the
+            access log.
+
+    Returns:
+        The method handler to register for this RPC.
+    """
+    inner = wrap_handler(handler, Struct, dependencies=dependencies, path=path)
+
+    def behavior(request: Any, context: grpc.ServicerContext) -> Any:
+        """Adapt ``Struct`` wire format to dicts, then dispatch."""
+        return inner(_to_dict(request), context)
+
+    factory = {
+        (False, False): grpc.unary_unary_rpc_method_handler,
+        (False, True): grpc.unary_stream_rpc_method_handler,
+        (True, False): grpc.stream_unary_rpc_method_handler,
+        (True, True): grpc.stream_stream_rpc_method_handler,
+    }[("request_iterator" in inspect.signature(handler).parameters, _is_response_stream(handler))]
+    return factory(
+        behavior,
+        request_deserializer=Struct.FromString,
+        response_serializer=Struct.SerializeToString,
+    )
 
 
 def stream(
