@@ -109,16 +109,22 @@ def dispatch(
         Whatever the handler returns, serialized for the wire.
 
     Raises:
-        Exception: Any exception from the handler or dependencies.
+        Exception: Any exception from the dependencies or handler.
             ``GRPCException`` subclasses abort the RPC with their
-            status code and details; other exceptions propagate for
-            gRPC to map to ``UNKNOWN`` (dependencies may also call
-            ``context.abort`` for a specific status code).
+            status code and details; ``context.abort`` keeps the code
+            it was called with; other exceptions propagate for gRPC
+            to map to ``UNKNOWN``. The final status is logged through
+            the access logger either way.
     """
-    kwargs, tails = resolve_dependencies(dependencies, params, fn_hints, request, context)
-
+    kwargs: dict[str, Any] = {}
+    tails: list[Callable[[], None]] = []
     streaming = False
     try:
+        # resolved inside the try so dependency failures get the same
+        # status mapping and access logging as handler failures.
+        kwargs = resolve_dependencies(
+            dependencies, params, fn_hints, request, context, tails
+        )
         result = handler(**kwargs)
         if isinstance(result, (Message, dict)) or result is None:
             log_access(context, path, grpc.StatusCode.OK)
@@ -130,7 +136,9 @@ def dispatch(
         log_access(context, path, exc.code)
         context.abort(exc.code, exc.details)
     except Exception:
-        log_access(context, path, grpc.StatusCode.UNKNOWN)
+        # context.code() is already set when the failure was a
+        # context.abort(code, details); None otherwise.
+        log_access(context, path, context.code() or grpc.StatusCode.UNKNOWN)
         raise
     finally:
         # streaming teardown is owned by stream(); run it exactly once.
@@ -145,7 +153,8 @@ def resolve_dependencies(
     fn_hints: dict[str, Any],
     request: Any,
     context: grpc.ServicerContext,
-) -> tuple[dict[str, Any], list[Callable[[], None]]]:
+    tails: list[Callable[[], None]],
+) -> dict[str, Any]:
     """
     Resolve the app-wide and signature dependencies for one call.
 
@@ -155,13 +164,13 @@ def resolve_dependencies(
         fn_hints: The handler's resolved type hints.
         request: Request message, or the request iterator on streams.
         context: gRPC servicer context.
+        tails: Post-call teardowns, appended in resolution order so
+            teardowns already queued before a failed dependency still run.
 
     Returns:
-        A ``(kwargs, tails)`` pair: the keyword arguments for the handler
-        (request/context and resolved dependencies), and the queued
-        post-call teardowns in resolution order.
+        The keyword arguments for the handler (request/context and
+        the resolved dependencies).
     """
-    tails: list[Callable[[], None]] = []
     kwargs: dict[str, Any] = {}
     for dep in dependencies:
         _, tail = resolve_dependency(dep.dependency, request, context)
@@ -177,7 +186,7 @@ def resolve_dependencies(
         elif name == "context":
             kwargs[name] = context
 
-    return kwargs, tails
+    return kwargs
 
 
 def resolve_dependency(
@@ -364,7 +373,9 @@ def stream(
         log_access(context, path, exc.code)
         context.abort(exc.code, exc.details)
     except Exception:
-        log_access(context, path, grpc.StatusCode.UNKNOWN)
+        # context.code() is already set when the failure was a
+        # context.abort(code, details); None otherwise.
+        log_access(context, path, context.code() or grpc.StatusCode.UNKNOWN)
         raise
     finally:
         for tail in tails:

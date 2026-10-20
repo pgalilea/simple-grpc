@@ -5,8 +5,8 @@ import logging
 import grpc
 import pytest
 
-from simple_grpc import SimpleGRPC, logging as sg_logging
-from simple_grpc.exceptions import NotFoundError
+from simple_grpc import Depends, SimpleGRPC, logging as sg_logging
+from simple_grpc.exceptions import NotFoundError, UnauthenticatedError
 from simple_grpc.logging import LoggingConfig
 
 
@@ -145,13 +145,64 @@ def test_access_log_unknown_exception(app, mocker):
     pb2, pb2_grpc = app._load_generated()["demo"]
     servicer = app._build_servicer("Echo", pb2, pb2_grpc)
     access = mocker.patch("simple_grpc.logging.access_logger", disabled=False)
+    context = mocker.Mock()
+    context.code.return_value = None
 
     with pytest.raises(RuntimeError, match="boom"):
-        servicer.Say(pb2.EchoRequest(), mocker.Mock())
+        servicer.Say(pb2.EchoRequest(), context)
 
     lines = rendered(access)
     assert len(lines) == 1
     assert lines[0].endswith('"POST /demo.Echo/Say HTTP/2.0" UNKNOWN')
+
+
+def test_access_log_abort_code(app, mocker):
+    """A handler calling context.abort logs the real status code, not UNKNOWN."""
+
+    @app.rpc("Echo", "Say")
+    def say(request, context):
+        context.abort(grpc.StatusCode.NOT_FOUND, "gone")
+
+    app._compile()
+    pb2, pb2_grpc = app._load_generated()["demo"]
+    servicer = app._build_servicer("Echo", pb2, pb2_grpc)
+    access = mocker.patch("simple_grpc.logging.access_logger", disabled=False)
+    context = mocker.Mock()
+    context.abort.side_effect = Exception()  # like real grpc, after setting the code
+    context.code.return_value = grpc.StatusCode.NOT_FOUND
+
+    with pytest.raises(Exception):
+        servicer.Say(pb2.EchoRequest(), context)
+
+    lines = rendered(access)
+    assert len(lines) == 1
+    assert lines[0].endswith('"POST /demo.Echo/Say HTTP/2.0" NOT_FOUND')
+
+
+def test_access_log_dependency_grpc_exception(app, mocker):
+    """A GRPCException from a dependency logs and aborts with its code."""
+
+    def forbidden(context):
+        raise UnauthenticatedError("no token")
+
+    @app.rpc("Echo", "Say")
+    def say(request, ok=Depends(forbidden)):
+        return {"message": "should-not-happen"}
+
+    app._compile()
+    pb2, pb2_grpc = app._load_generated()["demo"]
+    servicer = app._build_servicer("Echo", pb2, pb2_grpc)
+    access = mocker.patch("simple_grpc.logging.access_logger", disabled=False)
+    context = mocker.Mock()
+    context.abort.side_effect = RuntimeError("abort raises")  # like real grpc
+
+    with pytest.raises(RuntimeError):
+        servicer.Say(pb2.EchoRequest(), context)
+
+    context.abort.assert_called_once_with(UnauthenticatedError.code, "no token")
+    lines = rendered(access)
+    assert len(lines) == 1
+    assert lines[0].endswith('"POST /demo.Echo/Say HTTP/2.0" UNAUTHENTICATED')
 
 
 def test_access_log_streaming(app, mocker):
