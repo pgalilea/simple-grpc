@@ -1,16 +1,17 @@
-"""Client for dev_server.py: typed stub for proto RPCs, Struct calls for schemaless ones."""
+"""Client: typed stub for proto RPCs, Struct calls for schemaless ones."""
 
-from pathlib import Path
 import sys
-import tempfile
 
 from google.protobuf import struct_pb2
 from google.protobuf.json_format import MessageToDict, ParseDict
 import grpc
+from protos import CALC_PROTO
+
+from simple_grpc import SimpleGRPC
 
 
-TMP_DIR = Path(tempfile.gettempdir()) / "simple_grpc_example_2"
-sys.path.insert(0, str(TMP_DIR))
+# same content as server.py -> same content-addressed dir -> same generated code
+sys.path.insert(0, str(SimpleGRPC(raw_protos={"calc": CALC_PROTO}).proto_config.service_path))
 
 from calc_pb2 import AddRequest  # type: ignore # noqa: E402
 from calc_pb2_grpc import CalculatorStub  # type: ignore # noqa: E402

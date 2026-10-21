@@ -49,6 +49,67 @@ def test_compile_and_load(app):
     assert hasattr(pb2_grpc, "EchoServicer")
 
 
+def test_compile_imports_well_known_type(tmp_path):
+    """Well-known types (struct.proto etc.) resolve thanks to the bundled include path."""
+    proto_dir = tmp_path / "protos"
+    proto_dir.mkdir()
+    (proto_dir / "dynamic.proto").write_text(
+        """
+        syntax = "proto3";
+
+        import "google/protobuf/struct.proto";
+
+        service Dynamic {
+          rpc Get (google.protobuf.Struct) returns (google.protobuf.Struct);
+        }
+        """
+    )
+    (tmp_path / "services").mkdir()
+    app = SimpleGRPC(
+        proto_path=proto_dir,
+        service_path=tmp_path / "services",
+    )
+
+    app._compile()
+
+    pb2, _ = app._load_generated()["dynamic"]
+    # imported well-known symbols live in the descriptor pool, not as module attrs
+    assert pb2.DESCRIPTOR.services_by_name["Dynamic"] is not None
+
+
+def test_raw_protos_rendezvous():
+    """Same inline content hashes to the same dir; different content elsewhere."""
+    app = SimpleGRPC(raw_protos={"demo": PROTO})
+    again = SimpleGRPC(raw_protos={"demo": PROTO})
+
+    assert again.proto_config.proto_path == app.proto_config.proto_path
+    assert (app.proto_config.proto_path / "demo.proto").exists()
+    # generated code lands in the same dir by default, so clients rendezvous
+    assert app.proto_config.service_path == app.proto_config.proto_path
+    assert app.protos == {"demo.proto": PROTO}
+
+    edited = SimpleGRPC(raw_protos={"demo": PROTO + "\n"})
+    assert edited.proto_config.proto_path != app.proto_config.proto_path
+
+
+def test_raw_protos_compile_and_load():
+    """Inline protos compile into typed modules in the rendezvous dir."""
+    app = SimpleGRPC(raw_protos={"demo": PROTO})
+
+    app._compile()
+
+    pb2, pb2_grpc = app._load_generated()["demo"]
+    assert hasattr(pb2_grpc, "EchoServicer")
+
+
+def test_raw_protos_and_file_protos_are_exclusive(tmp_path):
+    """Passing raw_protos together with disk proto config raises ValueError."""
+    with pytest.raises(ValueError, match="raw_protos"):
+        SimpleGRPC(raw_protos={"demo": PROTO}, proto_path=tmp_path)
+    with pytest.raises(ValueError, match="raw_protos"):
+        SimpleGRPC(raw_protos={"demo": PROTO}, proto_files=["demo.proto"])
+
+
 def test_rpc_dispatch(app, mocker):
     @app.rpc("Echo", "Say")
     def say(request, context):

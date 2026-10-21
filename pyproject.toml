@@ -1,13 +1,25 @@
 [project]
 name = "simple-grpc"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.1.5"
+description = "SimpleGRPC - High-performance gRPC made simple. Write less code, ship to production faster."
 readme = "README.md"
 license = "MIT"
 authors = [
-    { name = "Pablo Galilea", email = "pgalilea@me.com" }
+    { name = "Pablo Galilea", email = "pgalilea@me.com" },
 ]
 requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
+]
 dependencies = [
     "click>=8.5.0",
     "grpcio>=1.84.0",
@@ -24,8 +36,16 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.10.0,<0.11"]
+build-backend = "uv_build"
+
+[tool.uv]
+exclude-newer = "7 days"
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = "simple_grpc"
+source-include = ["tests/**"]
 
 [tool.ruff]
 line-length = 100
@@ -43,7 +63,7 @@ select = [
 ignore = [
     "F401",
     "F403",
-    "B008"  # allow Depends(dependency) parameter defaults — the DI idiom of this library
+    "B008"  # allow Depends(dependency)
 ]
 
 [tool.ruff.lint.isort]
@@ -58,6 +78,5 @@ reportInvalidTypeForm = "none"
 reportArgumentType = false
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
 asyncio_mode = "auto"
 filterwarnings = []

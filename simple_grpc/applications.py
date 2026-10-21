@@ -46,9 +46,10 @@ class SimpleGRPC:
         self,
         *,
         thread_pool: ThreadPoolExecutor | None = None,
-        proto_path: str | Path = "protos",
+        raw_protos: dict[str, str] | None = None,
+        proto_path: str | Path | None = None,
         proto_files: list[str] | None = None,
-        service_path: str | Path = "grpc_services",
+        service_path: str | Path | None = None,
         port: int = 50051,
         dependencies: list[Depends] | None = None,
         credentials: ServerCredentials | None = None,
@@ -58,13 +59,30 @@ class SimpleGRPC:
         """
         Store the compile config; handlers attach later via :meth:`rpc`.
 
+        Raises:
+            ValueError: If ``raw_protos`` is passed together with
+                ``proto_path`` or ``proto_files`` — provide protos either as
+                inline content or as files on disk, not both.
+
         Args:
             thread_pool: Executor used to serve requests. Defaults to a new
                 ``ThreadPoolExecutor``.
-            proto_path: Directory containing ``.proto`` files.
-            proto_files: Proto files to compile; defaults to all ``*.proto``
-                in ``proto_path``.
+            raw_protos: Proto content as inline strings, keyed by the stem to
+                give the generated modules (``{"calc": "syntax..."}`` ->
+                ``calc_pb2``). Materialized into a content-addressed dir under
+                ``tempfile.gettempdir()``; identical content maps to the
+                identical dir, so a client constructing the app with the same
+                content finds the generated code without coordination.
+            proto_path: Directory containing ``.proto`` files. ``None``
+                (default) resolves to the raw-proto dir in raw mode, else
+                ``"protos"``.
+            proto_files: Proto files to compile; ``None`` (default) discovers
+                all ``*.proto`` in ``proto_path`` in file mode, or uses the
+                ``raw_protos`` keys in raw mode.
             service_path: Output directory for the generated ``*_pb2*.py``.
+                ``None`` (default) resolves to the raw-proto dir in raw mode,
+                else ``"grpc_services"``. An explicitly passed value wins in
+                both modes (the client passes the same one when rendezvousing).
             port: Port the server binds with ``dev()``/``run()``.
         credentials: TLS credentials; each PEM field takes a ``Path`` or
                 the content itself. Given, ``_start`` binds with
@@ -83,7 +101,8 @@ class SimpleGRPC:
                 useful for exotic ``GenericRpcHandler`` setups.
         """
         self.thread_pool = thread_pool or ThreadPoolExecutor()
-        self.proto_config = self.config_proto_files(
+        self.proto_config = ProtoConfig.config_proto_files(
+            raw_protos=raw_protos,
             proto_path=proto_path,
             proto_files=proto_files,
             service_path=service_path,
@@ -137,7 +156,7 @@ class SimpleGRPC:
         Raises:
             RuntimeError: If ``protoc`` exits with a non-zero status.
         """
-        if not self.proto_config.service_path.exists():
+        if not self.proto_config.service_path.exists():  # type: ignore[reportOptionalMemberAccess]
             raise ValueError(f"service_path '{self.proto_config.service_path}' does not exist.")
         if len(self.proto_config.proto_files) == 0:
             raise RuntimeError(
@@ -265,28 +284,6 @@ class SimpleGRPC:
     ) -> Callable:
         """Delegate to :func:`simple_grpc.dispatch.wrap_handler`."""
         return dispatch.wrap_handler(handler, response_cls, dependencies=dependencies, path=path)
-
-    def config_proto_files(
-        self,
-        proto_path: str | Path,
-        proto_files: list[str] | None,
-        service_path: str | Path,
-    ) -> ProtoConfig:
-        """Build the compile config.
-
-        Args:
-            proto_path: Directory containing ``.proto`` files.
-            proto_files: Proto files to compile, or ``None`` to discover all.
-            service_path: Output directory for generated modules.
-
-        Returns:
-            The resolved :class:`ProtoConfig`.
-        """
-        return ProtoConfig(
-            proto_path=proto_path,
-            proto_files=proto_files,
-            service_path=service_path,
-        )
 
     @property
     def protos(self) -> dict[str, str]:

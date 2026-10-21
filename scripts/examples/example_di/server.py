@@ -14,44 +14,15 @@ stay clean; ``log_dep`` uses the plain ``Depends(...)`` default style.
 """
 
 from dataclasses import dataclass
-from pathlib import Path
-import tempfile
 from typing import Annotated
+
+from protos import NOTES_PROTO
 
 from simple_grpc import Depends, SimpleGRPC, status
 
 
-TMP_DIR = Path(tempfile.gettempdir()) / "simple_grpc_example_3"
-TMP_DIR.mkdir(exist_ok=True)
-(TMP_DIR / "notes.proto").write_text("""
-syntax = "proto3";
-
-service Notes {
-  rpc GetNote (GetNoteRequest) returns (NoteReply);
-  rpc WhoAmI (WhoAmIRequest) returns (WhoAmIReply);
-}
-
-message GetNoteRequest {
-  int64 id = 1;
-}
-
-message NoteReply {
-  int64 id = 1;
-  string title = 2;
-}
-
-message WhoAmIRequest {
-}
-
-message WhoAmIReply {
-  string user = 1;
-}
-""")
-
 app = SimpleGRPC(
-    proto_path=TMP_DIR,
-    proto_files=["notes.proto"],
-    service_path=TMP_DIR,
+    raw_protos={"notes": NOTES_PROTO},
     port=50054,
 )
 

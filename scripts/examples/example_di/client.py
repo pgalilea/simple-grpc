@@ -1,14 +1,15 @@
-"""Client for dev_server.py: valid and invalid bearer tokens, generated notes."""
+"""Client: valid and invalid bearer tokens, generated notes."""
 
-from pathlib import Path
 import sys
-import tempfile
 
 import grpc
+from protos import NOTES_PROTO
+
+from simple_grpc import SimpleGRPC
 
 
-sp = Path(tempfile.gettempdir()) / "simple_grpc_example_3"
-sys.path.insert(0, str(sp))
+# same content as server.py -> same content-addressed dir -> same generated code
+sys.path.insert(0, str(SimpleGRPC(raw_protos={"notes": NOTES_PROTO}).proto_config.service_path))
 
 import notes_pb2 as pb2  # type: ignore # noqa: E402
 from notes_pb2_grpc import NotesStub  # type: ignore # noqa: E402

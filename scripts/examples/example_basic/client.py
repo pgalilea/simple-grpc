@@ -1,14 +1,15 @@
-"""Client for dev_server.py: imports the generated modules from the tmp dir."""
+"""Client: imports the generated modules from the raw-proto rendezvous dir."""
 
-from pathlib import Path
 import sys
-import tempfile
 
 import grpc
+from protos import GREETER_PROTO
+
+from simple_grpc import SimpleGRPC
 
 
-sp = Path(tempfile.gettempdir()) / "simple_grpc_example_1"
-sys.path.insert(0, str(sp))
+# same content as server.py -> same content-addressed dir -> same generated code
+sys.path.insert(0, str(SimpleGRPC(raw_protos={"greeter": GREETER_PROTO}).proto_config.service_path))
 
 import greeter_pb2 as pb2  # type: ignore # noqa: E402
 from greeter_pb2_grpc import CalculatorStub, GreeterStub  # type: ignore # noqa: E402
