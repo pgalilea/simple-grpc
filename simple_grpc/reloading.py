@@ -1,4 +1,4 @@
-"""Hot reload for :meth:`SimpleGRPC.dev` — serve in a child process, restart on changes."""
+"""Hot reload for :meth:`SimpleGRPC.dev` - serve in a child process, restart on changes."""
 
 from collections.abc import Sequence
 from fnmatch import fnmatch

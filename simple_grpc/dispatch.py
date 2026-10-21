@@ -122,9 +122,7 @@ def dispatch(
     try:
         # resolved inside the try so dependency failures get the same
         # status mapping and access logging as handler failures.
-        kwargs = resolve_dependencies(
-            dependencies, params, fn_hints, request, context, tails
-        )
+        kwargs = resolve_dependencies(dependencies, params, fn_hints, request, context, tails)
         result = handler(**kwargs)
         if isinstance(result, (Message, dict)) or result is None:
             log_access(context, path, grpc.StatusCode.OK)
@@ -281,7 +279,7 @@ def _is_response_stream(handler: Callable) -> bool:
     Decide whether a schemaless handler streams its responses.
 
     A handler streams when it is a generator function or its return
-    annotation is an ``Iterator``/``Generator``/``Iterable`` — mirroring how
+    annotation is an ``Iterator``/``Generator``/``Iterable`` - mirroring how
     :func:`dispatch` routes non-message results at call time.
 
     Args:
@@ -311,7 +309,7 @@ def schemaless_method_handler(
     handler shape: declaring ``request_iterator`` makes it request-streaming;
     being a generator function (or annotating an ``Iterator``/``Generator``/
     ``Iterable`` return) makes it response-streaming. Any other flavor is
-    unary — annotate streaming returns, or the RPC breaks at call time.
+    unary - annotate streaming returns, or the RPC breaks at call time.
 
     Args:
         handler: The user-registered handler.

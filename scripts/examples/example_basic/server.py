@@ -1,4 +1,4 @@
-"""Basic SimpleGRPC example in dev mode — the schema is inline proto content."""
+"""Basic SimpleGRPC example in dev mode - the schema is inline proto content."""
 
 from protos import GREETER_PROTO
 

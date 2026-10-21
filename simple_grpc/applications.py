@@ -61,7 +61,7 @@ class SimpleGRPC:
 
         Raises:
             ValueError: If ``raw_protos`` is passed together with
-                ``proto_path`` or ``proto_files`` — provide protos either as
+                ``proto_path`` or ``proto_files`` - provide protos either as
                 inline content or as files on disk, not both.
 
         Args:
@@ -146,7 +146,7 @@ class SimpleGRPC:
             tls = f"({style('No', self.logging_config.use_colors, bold=True)} TLS)"
 
         server.start()
-        logger.info("Serving on [::]:%d %s — press CTRL+C to quit", self.port, tls)
+        logger.info("Serving on [::]:%d %s - press CTRL+C to quit", self.port, tls)
         server.wait_for_termination()
 
     def _compile(self) -> None:
@@ -160,7 +160,7 @@ class SimpleGRPC:
             raise ValueError(f"service_path '{self.proto_config.service_path}' does not exist.")
         if len(self.proto_config.proto_files) == 0:
             raise RuntimeError(
-                f"no proto files in directory: {self.proto_config.proto_path} — "
+                f"no proto files in directory: {self.proto_config.proto_path} - "
                 f"proto-backed @app.rpc handlers require a .proto file; or use "
                 f"@app.schemaless_rpc for endpoints without a schema"
             )

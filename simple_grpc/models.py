@@ -73,7 +73,7 @@ class ProtoConfig:
         self.proto_path = Path(tempfile.gettempdir()) / f"simple_grpc_raw_{digest}"
         self.proto_files = sorted(f"{stem}.proto" for stem in self.raw_protos)  # type: ignore[reportOptionalIterable]
         # two processes first-compiling identical protos can torn-read a
-        # half-written *_pb2*.py; fails loud (SyntaxError), retry heals —
+        # half-written *_pb2*.py; fails loud (SyntaxError), retry heals -
         # stage protoc output + os.replace if it ever bites
         self.proto_path.mkdir(exist_ok=True)
 

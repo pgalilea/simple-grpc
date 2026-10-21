@@ -84,7 +84,7 @@ class LoggingConfig:
     """
     Logging knobs for serving.
 
-    ``log_level`` and ``use_colors`` are resolved eagerly at construction —
+    ``log_level`` and ``use_colors`` are resolved eagerly at construction -
     like ``ServerCredentials``, bad values fail fast, not at serve time.
     """
 
@@ -137,7 +137,7 @@ class ColourFormatter(logging.Formatter):
 def configure_logging(config: LoggingConfig) -> None:
     """(Re)configure the two loggers per ``config`` with colored handlers.
 
-    Owns ``simple_grpc.error`` and ``simple_grpc.access`` completely — any
+    Owns ``simple_grpc.error`` and ``simple_grpc.access`` completely - any
     pre-existing handlers on them are replaced. Users get full control by
     adjusting the loggers *after* serving starts, or by never letting
     simple_grpc serve console output through them.
