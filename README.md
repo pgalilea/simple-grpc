@@ -34,19 +34,108 @@ pip install simple-grpc
 
 ## 🚀 Quickstart
 
+Server-side snippets: each one is a complete, runnable file (`python server.py`).
+
 ### Schemaless endpoints
-You can expose an endpoint, even without proto files. 
-```Python
+
+No proto files at all - plain dicts in, dicts out.
+
+```python
+from simple_grpc import SimpleGRPC
+
+app = SimpleGRPC(port=50051)
 
 
+@app.schemaless_rpc("Greeter", "SayHello")
+def say_hello(request):
+    return {"message": f"Hello, {request['name']}!"}
 
+
+if __name__ == "__main__":
+    app.run()
 ```
 
+### Proto-backed endpoints
+
+Pass proto content inline; it is compiled at startup into a generated-code directory under the system temp dir - no `.proto` file, no build step.
+
+```python
+from simple_grpc import SimpleGRPC
+
+CALCULATOR_PROTO = """
+syntax = "proto3";
+
+service Calculator {
+  rpc Add (AddRequest) returns (AddReply);
+}
+
+message AddRequest {
+  int64 a = 1;
+  int64 b = 2;
+}
+
+message AddReply {
+  int64 sum = 1;
+}
+"""
+
+app = SimpleGRPC(raw_protos={"calculator": CALCULATOR_PROTO}, port=50052)
+
+
+@app.rpc("Calculator", "Add")
+def add(request):
+    return {"sum": request.a + request.b}
+
+
+if __name__ == "__main__":
+    app.run()
+```
+
+### Dependency injection
+
+Declare `Depends()` in the handler signature. Plain dependencies resolve before the call; generator dependencies (`yield`) open and tear down around it.
+
+```python
+from typing import Annotated
+
+from simple_grpc import Depends, SimpleGRPC
+
+app = SimpleGRPC(port=50053)
+
+
+def auth_dep(context):
+    """Read the bearer token from the metadata headers."""
+    metadata = dict(context.invocation_metadata())
+    if metadata.get("authorization") != "Bearer abc123":
+        context.abort(16, "unauthenticated")
+    return "alice"
+
+
+UserDep = Annotated[str, Depends(auth_dep)]
+
+
+def db_session():
+    """Open a fake session for the handler and close it afterwards."""
+    print("db: session opened")
+    yield {"notes": ["shopping", "taxes"]}
+    print("db: session closed")
+
+
+@app.schemaless_rpc("Notes", "GetNote")
+def get_note(request, user: UserDep, db: Annotated[dict, Depends(db_session)]):
+    return {"user": user, "title": db["notes"][int(request["id"]) - 1]}
+
+
+if __name__ == "__main__":
+    app.run()
+```
+
+During development, swap `app.run()` for `app.dev()` to hot-reload on file changes.
 
 [More examples...](scripts/examples/)
 
 ## 🧪 Tests
 ```sh
-uv run pytest tests -vs
+uv run pytest -vs
 ```
 

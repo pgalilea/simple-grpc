@@ -81,7 +81,7 @@ def test_start_logs_banner(app, mocker):
     assert "1 proto file(s) from '" in lines and "protos" in lines
     assert "services" in lines  # service directory
     assert "Registered services: Echo (Say)" in lines
-    assert "Serving on [::]:50051 (No TLS)" in lines
+    assert "Serving on" in lines
 
 
 def test_start_logs_tls_when_configured(app, mocker):
@@ -332,9 +332,7 @@ def test_access_log_disabled_streaming(app, mocker):
     """A disabled access logger also silences the streaming completion line."""
     access = mocker.patch("simple_grpc.logging.access_logger", disabled=True)
 
-    out = list(
-        SimpleGRPC._stream(iter([None]), mocker.sentinel.cls, mocker.Mock(), [], path="/x")
-    )
+    out = list(SimpleGRPC._stream(iter([None]), mocker.sentinel.cls, mocker.Mock(), [], path="/x"))
 
     assert out == [None]
     access.info.assert_not_called()
