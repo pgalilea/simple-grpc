@@ -1,6 +1,10 @@
-![SimpleGRPC](https://i.ibb.co/Qv3LjyDz/simplegrpc-logo.png)
+<p align="center">
+  <a href="https://github.com/pgalilea/simple-grpc"><img src="https://i.ibb.co/Qv3LjyDz/simplegrpc-logo.png" alt="SimpleGRPC"></a>
+</p>
 
-*High-performance gRPC made simple. Write less, ship to production faster.*
+<br/>
+
+<p align="center"><em>High-performance gRPC made simple. Write less, ship to production faster.</em></p>
 
 Development using [gRPC](https://grpc.io/docs/what-is-grpc/introduction/) made easy. Heavily inspired by [FastAPI](https://fastapi.tiangolo.com/).
 
@@ -31,7 +35,7 @@ From pypi:
 pip install simple-grpcio
 ```
 
-The package name on PyPI ends in "**io**" because the name was already taken.
+The package name on PyPI ends in "**io**" because the desired name was already taken 🥲.
 
 ## 🚀 Quickstart
 
