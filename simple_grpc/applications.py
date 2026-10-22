@@ -119,8 +119,10 @@ class SimpleGRPC:
         """Compile, load generated modules, register services, and serve."""
 
         configure_logging(self.logging_config)
+
         logger.info("Starting simple_grpc (pid %s)", os.getpid())
         mods: dict[str, tuple[ModuleType, ModuleType]] = {}
+
         if self._handlers:
             self._compile()
             proto = self.proto_config
@@ -131,6 +133,7 @@ class SimpleGRPC:
                 proto.service_path,
             )
             mods = self._load_generated()
+
         server = grpc.server(self.thread_pool, **self._server_options)
         self._register_services(mods, server)
         self._register_schemaless(server)
@@ -184,7 +187,7 @@ class SimpleGRPC:
             # pop first so a recompile in the dev loop never serves stale code.
             sys.modules.pop(f"{name}_pb2", None)
             sys.modules[f"{name}_pb2"] = pb2
-            pb2_grpc = utils.module_from_file(sp / f"{name}_pb2_grpc.py", f"{name}_pb2_grpc")
+            pb2_grpc = utils.module_from_file(sp / f"{name}_pb2_grpc.py", f"{name}_pb2_grpc")  # type: ignore
             mods[name] = (pb2, pb2_grpc)
 
         return mods

@@ -1,4 +1,5 @@
 # Repository guidelines
+`simple_grpc` is a python framework for developing web applications using grpc quickly and easily.
 
 ## Coding
 - Always use typing for methods, functions and return types

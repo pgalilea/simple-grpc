@@ -1,5 +1,5 @@
 [project]
-name = "simple-grpc"
+name = "simple-grpcio"
 version = "0.1.5"
 description = "SimpleGRPC - High-performance gRPC made simple. Write less code, ship to production faster."
 readme = "README.md"
