@@ -23,6 +23,7 @@ classifiers = [
 dependencies = [
     "click>=8.5.0",
     "grpcio>=1.84.0",
+    "grpcio-health-checking>=1.84.0",
     "grpcio-tools>=1.84.0",
 ]
 

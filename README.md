@@ -143,6 +143,27 @@ During development, swap `app.run()` for `app.dev()` to hot-reload on file chang
 
 [More examples...](scripts/examples/)
 
+### Health checking
+
+Pass `health=True` to expose the standard `grpc.health.v1.Health` service (the gRPC health checking protocol): Kubernetes, Envoy and `grpcurl` can probe the server with zero extra code.
+
+```python
+from grpc_health.v1 import health_pb2
+
+from simple_grpc import SimpleGRPC
+
+app = SimpleGRPC(port=50053, health=True)  # reports SERVING for the whole server
+
+if __name__ == "__main__":
+    app.run()
+```
+
+To report a degraded state, flip the status on the servicer (available after the server starts):
+
+```python
+app.health_servicer.set("", health_pb2.HealthCheckResponse.NOT_SERVING)
+```
+
 ## 🧪 Tests
 
 ```sh

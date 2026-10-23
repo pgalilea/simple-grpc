@@ -54,6 +54,7 @@ class SimpleGRPC:
         dependencies: list[Depends] | None = None,
         credentials: ServerCredentials | None = None,
         logging_config: LoggingConfig | None = None,
+        health: bool = False,
         **server_options: Unpack[ServerOptions],
     ) -> None:
         """
@@ -93,6 +94,13 @@ class SimpleGRPC:
             dependencies: App-wide ``Depends`` resolved before every RPC,
                 applied automatically to all handlers. Generator dependencies
                 wrap each call (pre/`yield`/post).
+            health: Expose the standard ``grpc.health.v1.Health`` service
+                (the gRPC health checking protocol) on the server, reporting
+                ``SERVING`` for the whole server by default. After
+                :meth:`_start`, ``self.health_servicer`` holds the
+                ``HealthServicer`` - use
+                ``health_servicer.set("", ...NOT_SERVING)`` to report
+                degraded state; ``None`` before startup or when disabled.
             **server_options: Forwarded verbatim to ``grpc.server()`` at
                 startup (``options``, ``compression``, ``interceptors``,
                 ``maximum_concurrent_rpcs``, ``xds``, ...). Passing
@@ -114,6 +122,8 @@ class SimpleGRPC:
         self._schemaless_handlers: dict[str, dict[str, Callable]] = {}
         self._app_dependencies: tuple[Depends, ...] = tuple(dependencies or ())
         self._server_options: ServerOptions = server_options
+        self.health = health
+        self.health_servicer: Any | None = None
 
     def _start(self) -> None:
         """Compile, load generated modules, register services, and serve."""
@@ -137,8 +147,15 @@ class SimpleGRPC:
         server = grpc.server(self.thread_pool, **self._server_options)
         self._register_services(mods, server)
         self._register_schemaless(server)
+
+        if self.health:
+            self._register_health(server)
         registered = {**self._handlers, **self._schemaless_handlers}
         services = ", ".join(f"{svc} ({', '.join(m)})" for svc, m in registered.items())
+
+        if self.health_servicer:
+            services = f"{services}, grpc.health.v1.Health (Check, Watch)".lstrip(", ")
+
         logger.info("Registered services: %s", services or "(none)")
 
         if self.credentials:
@@ -264,6 +281,20 @@ class SimpleGRPC:
             server.add_generic_rpc_handlers(
                 (grpc.method_handlers_generic_handler(service, method_handlers),)
             )
+
+    def _register_health(self, server: grpc.Server) -> None:
+        """
+        Attach the standard ``grpc.health.v1.Health`` service to the server.
+
+        Reports ``SERVING`` for the whole server (empty service name) by
+        default; the servicer is kept on ``self.health_servicer`` so callers
+        can report per-service statuses or ``NOT_SERVING``.
+        """
+        from grpc_health.v1 import health, health_pb2, health_pb2_grpc
+
+        self.health_servicer = health.HealthServicer()
+        self.health_servicer.set("", health_pb2.HealthCheckResponse.SERVING)
+        health_pb2_grpc.add_HealthServicer_to_server(self.health_servicer, server)
 
     @classmethod
     def _stream(
