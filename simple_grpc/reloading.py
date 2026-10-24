@@ -173,4 +173,4 @@ def _log_changes(changes: set[tuple[Change, str]]) -> None:
     Args:
         changes: The changes watchfiles reported for this reload.
     """
-    logger.info("Reloading due to changes in: %s", ", ".join(str(path) for _, path in changes))
+    logger.warning("Reloading due to changes in: %s", ", ".join(str(path) for _, path in changes))

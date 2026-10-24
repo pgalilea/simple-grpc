@@ -164,6 +164,26 @@ To report a degraded state, flip the status on the servicer (available after the
 app.health_servicer.set("", health_pb2.HealthCheckResponse.NOT_SERVING)
 ```
 
+### Reflection
+
+Pass `reflection=True` to expose the standard gRPC server reflection service: clients and tools (`grpcurl`, Postman, Insomnia) discover the served services and their schema at runtime, without the `.proto` files compiled in.
+
+```python
+from simple_grpc import SimpleGRPC
+
+app = SimpleGRPC(port=50058, reflection=True)
+
+if __name__ == "__main__":
+    app.run()
+```
+
+```sh
+grpcurl -plaintext localhost:50058 list
+grpcurl -plaintext -d '{"name": "grpcurl"}' localhost:50058 Greeter/SayHello
+```
+
+Reflection is aimed at testing and tooling - consider disabling (or restricting) it in production.
+
 ## 🧪 Tests
 
 ```sh

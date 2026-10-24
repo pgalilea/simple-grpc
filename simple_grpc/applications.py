@@ -55,6 +55,7 @@ class SimpleGRPC:
         credentials: ServerCredentials | None = None,
         logging_config: LoggingConfig | None = None,
         health: bool = False,
+        reflection: bool = False,
         **server_options: Unpack[ServerOptions],
     ) -> None:
         """
@@ -101,6 +102,14 @@ class SimpleGRPC:
                 ``HealthServicer`` - use
                 ``health_servicer.set("", ...NOT_SERVING)`` to report
                 degraded state; ``None`` before startup or when disabled.
+            reflection: Expose the standard gRPC server reflection service,
+                so clients and tools (``grpcurl``, Postman, Insomnia)
+                discover the served services and their schema at runtime
+                instead of needing the ``.proto`` files compiled in. Serves
+                the app's proto-backed services, plus the schemaless services
+                and ``grpc.health.v1.Health`` when enabled. Aimed at testing
+                and tooling; consider disabling (or restricting) it in
+                production.
             **server_options: Forwarded verbatim to ``grpc.server()`` at
                 startup (``options``, ``compression``, ``interceptors``,
                 ``maximum_concurrent_rpcs``, ``xds``, ...). Passing
@@ -124,6 +133,7 @@ class SimpleGRPC:
         self._server_options: ServerOptions = server_options
         self.health = health
         self.health_servicer: Any | None = None
+        self.reflection = reflection
 
     def _start(self) -> None:
         """Compile, load generated modules, register services, and serve."""
@@ -145,16 +155,24 @@ class SimpleGRPC:
             mods = self._load_generated()
 
         server = grpc.server(self.thread_pool, **self._server_options)
-        self._register_services(mods, server)
+        service_names = self._register_services(mods, server)
         self._register_schemaless(server)
 
         if self.health:
             self._register_health(server)
+            logger.info("Health service enabled")
+
         registered = {**self._handlers, **self._schemaless_handlers}
         services = ", ".join(f"{svc} ({', '.join(m)})" for svc, m in registered.items())
 
         if self.health_servicer:
             services = f"{services}, grpc.health.v1.Health (Check, Watch)".lstrip(", ")
+            service_names.append("grpc.health.v1.Health")
+
+        if self.reflection:
+            service_names += [*self._schemaless_handlers]
+            self._register_reflection(server, service_names)
+            logger.info("Reflection enabled (%s)", ", ".join(service_names))
 
         logger.info("Registered services: %s", services or "(none)")
 
@@ -249,18 +267,28 @@ class SimpleGRPC:
 
     def _register_services(
         self, mods: dict[str, tuple[ModuleType, ModuleType]], server: grpc.Server
-    ) -> None:
+    ) -> list[str]:
         """
         Attach a dispatching servicer to the server for each service.
 
         Args:
             mods: Mapping returned by :meth:`_load_generated`.
             server: The server receiving the servicers.
+
+        Returns:
+            The fully-qualified service names as registered on the wire
+            (``"pkg.Service"`` or plain ``"Service"``), in registration order.
         """
+        full_names = []
+
         for service in self._handlers:
             pb2, pb2_grpc = utils.find_service(mods, service)
             servicer = self._build_servicer(service, pb2, pb2_grpc)
             getattr(pb2_grpc, f"add_{service}Servicer_to_server")(servicer, server)
+            package = pb2.DESCRIPTOR.package
+            full_names.append(f"{package}.{service}" if package else service)
+
+        return full_names
 
     def _register_schemaless(self, server: grpc.Server) -> None:
         """
@@ -295,6 +323,23 @@ class SimpleGRPC:
         self.health_servicer = health.HealthServicer()
         self.health_servicer.set("", health_pb2.HealthCheckResponse.SERVING)
         health_pb2_grpc.add_HealthServicer_to_server(self.health_servicer, server)
+
+    def _register_reflection(self, server: grpc.Server, service_names: list[str]) -> None:
+        """
+        Attach the standard gRPC server reflection service to the server.
+
+        Clients and tools (``grpcurl``, Postman, Insomnia) then discover
+        ``service_names`` and their schema at runtime, without the ``.proto``
+        files compiled in.
+
+        Args:
+            server: The server receiving the reflection servicer.
+            service_names: Fully-qualified service names to advertise
+                (``"pkg.Service"`` or plain ``"Service"``).
+        """
+        from grpc_reflection.v1alpha import reflection
+
+        reflection.enable_server_reflection(service_names, server)
 
     @classmethod
     def _stream(
