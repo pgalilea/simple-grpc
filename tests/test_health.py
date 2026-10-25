@@ -39,7 +39,7 @@ def test_health_not_serving_reflects_status_change():
         stub.Check(health_pb2.HealthCheckRequest()).status == health_pb2.HealthCheckResponse.SERVING
     )
 
-    app.health_servicer.set("", health_pb2.HealthCheckResponse.NOT_SERVING)
+    app.set_health("not_serving")
     assert (
         stub.Check(health_pb2.HealthCheckRequest()).status
         == health_pb2.HealthCheckResponse.NOT_SERVING
@@ -57,7 +57,7 @@ def test_health_watch_pushes_status_changes():
     first = next(call)
     assert first.status == health_pb2.HealthCheckResponse.SERVING
 
-    app.health_servicer.set("", health_pb2.HealthCheckResponse.NOT_SERVING)
+    app.set_health("not_serving")
     assert next(call).status == health_pb2.HealthCheckResponse.NOT_SERVING
     call.cancel()
 
@@ -76,3 +76,8 @@ def test_health_disabled_is_unimplemented():
 def test_health_servicer_none_before_start_and_when_disabled():
     assert SimpleGRPC(health=True, port=0).health_servicer is None
     assert SimpleGRPC(health=False, port=0).health_servicer is None
+
+
+def test_set_health_raises_without_servicer():
+    with pytest.raises(RuntimeError):
+        SimpleGRPC(health=False, port=0).set_health("serving")

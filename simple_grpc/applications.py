@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import sys
 from types import ModuleType
-from typing import Any, Unpack
+from typing import Any, Literal, Unpack
 
 from google.protobuf import message_factory
 from google.protobuf.message import Message
@@ -99,9 +99,8 @@ class SimpleGRPC:
                 (the gRPC health checking protocol) on the server, reporting
                 ``SERVING`` for the whole server by default. After
                 :meth:`_start`, ``self.health_servicer`` holds the
-                ``HealthServicer`` - use
-                ``health_servicer.set("", ...NOT_SERVING)`` to report
-                degraded state; ``None`` before startup or when disabled.
+                ``HealthServicer`` - use :meth:`set_health` to change the
+                reported status; ``None`` before startup or when disabled.
             reflection: Expose the standard gRPC server reflection service,
                 so clients and tools (``grpcurl``, Postman, Insomnia)
                 discover the served services and their schema at runtime
@@ -340,6 +339,46 @@ class SimpleGRPC:
         from grpc_reflection.v1alpha import reflection
 
         reflection.enable_server_reflection(service_names, server)
+
+    def set_health(
+        self,
+        status: Literal["unknown", "serving", "not_serving"],
+        service: str = "",
+    ) -> None:
+        """
+        Set the health status of the whole server or one service.
+
+        Thin wrapper over ``self.health_servicer.set`` so callers don't need
+        to import ``grpc_health.v1.health_pb2``. Reports ``SERVING`` for the
+        whole server (empty service name) by default after startup.
+
+        Args:
+            status: Health to report: ``"serving"``, ``"not_serving"`` or
+                ``"unknown"``.
+            service: Service name to set the status for; ``""`` (default)
+                means the whole server, otherwise a fully-qualified proto
+                service name such as ``"pkg.Calc"``.
+
+        Raises:
+            RuntimeError: If the health service is disabled (``health=False``)
+                or the server has not been started yet, so
+                ``self.health_servicer`` is ``None``.
+            ValueError: If ``status`` is not one of the accepted strings.
+        """
+        if self.health_servicer is None:
+            raise RuntimeError(
+                "no health servicer: pass health=True and start the server "
+                "(run()/dev()) before calling set_health()"
+            )
+
+        from grpc_health.v1 import health_pb2
+
+        statuses = {
+            "unknown": health_pb2.HealthCheckResponse.UNKNOWN,
+            "serving": health_pb2.HealthCheckResponse.SERVING,
+            "not_serving": health_pb2.HealthCheckResponse.NOT_SERVING,
+        }
+        self.health_servicer.set(service, statuses[status])
 
     @classmethod
     def _stream(

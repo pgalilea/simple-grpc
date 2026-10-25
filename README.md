@@ -1,10 +1,10 @@
 <p align="center">
-  <a href="https://github.com/pgalilea/simple-grpc"><img src="https://i.ibb.co/Qv3LjyDz/simplegrpc-logo.png" alt="SimpleGRPC"></a>
+  <a href="https://github.com/pgalilea/simple-grpc"><img src="https://i.ibb.co/wNZtx6Kk/simple-grpc-white.png" alt="SimpleGRPC"></a>
 </p>
 
 <br/>
 
-<p align="center"><em>High-performance gRPC made simple. Write less, ship to production faster.</em></p>
+<p align="center"><em>High-performance gRPC made simple. Write less code, ship to production faster.</em></p>
 
 Development using [gRPC](https://grpc.io/docs/what-is-grpc/introduction/) made easy. Heavily inspired by [FastAPI](https://fastapi.tiangolo.com/).
 
@@ -148,8 +148,6 @@ During development, swap `app.run()` for `app.dev()` to hot-reload on file chang
 Pass `health=True` to expose the standard `grpc.health.v1.Health` service (the gRPC health checking protocol): Kubernetes, Envoy and `grpcurl` can probe the server with zero extra code.
 
 ```python
-from grpc_health.v1 import health_pb2
-
 from simple_grpc import SimpleGRPC
 
 app = SimpleGRPC(port=50053, health=True)  # reports SERVING for the whole server
@@ -158,10 +156,11 @@ if __name__ == "__main__":
     app.run()
 ```
 
-To report a degraded state, flip the status on the servicer (available after the server starts):
+To report a degraded state (or flip it back), use `set_health` (available after the server starts):
 
 ```python
-app.health_servicer.set("", health_pb2.HealthCheckResponse.NOT_SERVING)
+app.set_health("not_serving")
+app.set_health("serving")
 ```
 
 ### Reflection
