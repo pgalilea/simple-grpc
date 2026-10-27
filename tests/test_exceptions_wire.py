@@ -44,6 +44,27 @@ def test_grpc_exception_teardown_still_runs(mocker):
     assert ran == [True]
 
 
+def test_teardown_failure_does_not_mask_handler_error(mocker):
+    """A failing teardown does not replace the original RPC error."""
+    mocker.patch("simple_grpc.dispatch.logger")
+
+    def teardown() -> ...:
+        yield
+        raise RuntimeError("cleanup failed")
+
+    def handler(request, context, dep=Depends(teardown)):
+        raise NotFoundError("gone")
+
+    method = SimpleGRPC._wrap_handler(handler, _UnusedResponse, ())
+    context = mocker.Mock()
+    context.abort.side_effect = RuntimeError("abort raises")
+
+    with pytest.raises(RuntimeError, match="abort raises"):
+        method(request=mocker.sentinel.req, context=context)
+
+    context.abort.assert_called_once_with(NotFoundError.code, "gone")
+
+
 def test_non_grpc_exception_not_converted(mocker):
     """Plain exceptions still propagate for grpcio's UNKNOWN mapping."""
     expected = RuntimeError("boom")

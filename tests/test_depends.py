@@ -5,6 +5,7 @@ import grpc
 import pytest
 
 from simple_grpc import Depends, SimpleGRPC
+from simple_grpc.dispatch import run_tails, validate_dependency
 
 
 PROTO = """
@@ -145,6 +146,72 @@ def test_generator_teardown_on_handler_error(app, mocker):
     assert events == ["pre", "handler", "post"]
 
 
+def test_nested_generator_deps_teardown_after_handler(app, mocker):
+    """Nested generator deps are fully consumed after the handler, LIFO."""
+    events = []
+
+    def inner():
+        events.append("inner-pre")
+        yield "value"
+        yield "extra"  # drain() must consume the rest, not stop at the first yield
+        events.append("inner-post")
+
+    def middle(value=Depends(inner)):
+        events.append("middle-pre")
+        yield value
+        events.append("middle-post")
+
+    def outer(value=Depends(middle)):
+        events.append("outer-pre")
+        yield value
+        events.append("outer-post")
+
+    @app.rpc("Echo", "Say")
+    def say(request, value=Depends(outer)):
+        events.append(f"handler:{value}")
+        return {"message": value}
+
+    pb2, servicer = compile_build(app)
+    response = servicer.Say(pb2.EchoRequest(), mocker.Mock())
+
+    assert response.message == "value"
+    assert events == [
+        "inner-pre",
+        "middle-pre",
+        "outer-pre",
+        "handler:value",
+        "outer-post",
+        "middle-post",
+        "inner-post",
+    ]
+
+
+def test_nested_generator_teardown_on_dependency_error(app, mocker):
+    """Nested generators still run their remainder when a sibling dep raises."""
+    events = []
+
+    def inner():
+        events.append("inner-pre")
+        yield "value"
+        events.append("inner-post")
+
+    def boom():
+        raise RuntimeError("boom")
+
+    def outer(value=Depends(inner), _boom=Depends(boom)):
+        return value
+
+    @app.rpc("Echo", "Say")
+    def say(request, value=Depends(outer)):
+        return {"message": value}
+
+    pb2, servicer = compile_build(app)
+    with pytest.raises(RuntimeError, match="boom"):
+        servicer.Say(pb2.EchoRequest(), mocker.Mock())
+
+    assert events == ["inner-pre", "inner-post"]
+
+
 def test_generate_dep_value_injected(app, mocker):
     def half(request):
         return request.message[:2]
@@ -278,6 +345,53 @@ def test_annotated_depend_shared_and_nested(app, mocker):
     pb2, servicer = compile_build(app)
     response = servicer.Say(pb2.EchoRequest(message="hm"), mocker.Mock())
     assert response.message == "hi-u1 hm:u1"
+
+
+def test_cyclic_dependency_raises():
+    """A dependency cycle is rejected at validation time."""
+
+    def dep(value=None):
+        return value
+
+    dep.__defaults__ = (Depends(dep),)
+
+    with pytest.raises(ValueError, match="cyclic dependency"):
+        validate_dependency(dep)
+
+
+def test_run_tails_runs_all_after_failure():
+    """Every teardown runs even when an earlier one raises."""
+    events = []
+
+    def fail():
+        events.append("fail")
+        raise RuntimeError("cleanup failed")
+
+    def close():
+        events.append("close")
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        run_tails([fail, close])
+
+    assert events == ["fail", "close"]
+
+
+def test_run_tails_suppresses_failures(mocker):
+    """Suppressed teardown failures are logged, not raised."""
+    log = mocker.patch("simple_grpc.dispatch.logger")
+    events = []
+
+    def fail():
+        events.append("fail")
+        raise RuntimeError("cleanup failed")
+
+    def close():
+        events.append("close")
+
+    run_tails([fail, close], suppress=True)
+
+    assert events == ["fail", "close"]
+    log.exception.assert_called_once_with("dependency teardown failed")
 
 
 def test_depends_is_frozen():

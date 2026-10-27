@@ -3,6 +3,7 @@
 from collections.abc import Callable, Generator, Iterable, Iterator
 from functools import partial
 import inspect
+import sys
 from typing import Any, get_origin
 
 from google.protobuf.json_format import MessageToDict
@@ -11,7 +12,7 @@ from google.protobuf.struct_pb2 import Struct
 import grpc
 
 from simple_grpc.exceptions import GRPCException
-from simple_grpc.logging import log_access
+from simple_grpc.logging import log_access, logger
 from simple_grpc.params import INJECTABLE, Depends, hints, noop, param_dependency
 import simple_grpc.utils as utils
 
@@ -141,8 +142,7 @@ def dispatch(
     finally:
         # streaming teardown is owned by stream(); run it exactly once.
         if not streaming:
-            for tail in tails:
-                tail()
+            run_tails(tails, suppress=sys.exc_info()[0] is not None)
 
 
 def resolve_dependencies(
@@ -193,6 +193,10 @@ def resolve_dependency(
     """
     Resolve one dependency (and its nested ``Depends`` tree).
 
+    Nested generator dependencies keep their teardown: their tails are
+    folded into this dependency's tail, run after the handler (or after
+    the response stream ends), last-in-first-out.
+
     Args:
         fn: The dependency function.
         request: Request message, or the request iterator on streams.
@@ -200,28 +204,49 @@ def resolve_dependency(
 
     Returns:
         A ``(value, tail)`` pair: the value to inject, and a callable
-        running the dependency's post-handler remainder (a generator
-        tail, a no-op for plain functions).
+        running the dependency's post-handler remainder and then its
+        nested dependencies' tails.
 
     Raises:
         StopIteration: If a generator dependency yields before any value.
     """
     kwargs: dict[str, Any] = {}
+    tails: list[Callable[[], None]] = []
     fn_hints = hints(fn)
-    for name, param in inspect.signature(fn).parameters.items():
-        dep = param_dependency(param, fn_hints.get(name, param.annotation))
-        if dep is not None:
-            kwargs[name], _ = resolve_dependency(dep.dependency, request, context)
-        elif name == "request" or name == "request_iterator":
-            kwargs[name] = request
-        elif name == "context":
-            kwargs[name] = context
+
+    try:
+        for name, param in inspect.signature(fn).parameters.items():
+            dep = param_dependency(param, fn_hints.get(name, param.annotation))
+            if dep is not None:
+                kwargs[name], tail = resolve_dependency(dep.dependency, request, context)
+                tails.append(tail)
+            elif name == "request" or name == "request_iterator":
+                kwargs[name] = request
+            elif name == "context":
+                kwargs[name] = context
+    except BaseException:
+        run_tails(reversed(tails), suppress=True)
+        raise
+
+    nested = list(reversed(tails))
+    teardown = partial(run_tails, nested) if nested else noop
+    safe_teardown = partial(run_tails, nested, suppress=True) if nested else noop
 
     if not inspect.isgeneratorfunction(fn):
-        return fn(**kwargs), noop
+        try:
+            return fn(**kwargs), teardown
+        except BaseException:
+            safe_teardown()
+            raise
 
     gen = fn(**kwargs)
-    return next(gen), partial(drain, gen)
+    try:
+        value = next(gen)
+    except BaseException:
+        safe_teardown()
+        raise
+
+    return value, partial(run_tails, [partial(drain, gen), *nested])
 
 
 def drain(gen: Iterator[Any]) -> None:
@@ -230,19 +255,46 @@ def drain(gen: Iterator[Any]) -> None:
         pass
 
 
+def run_tails(tails: Iterable[Callable[[], None]], *, suppress: bool = False) -> None:
+    """
+    Run every teardown, even when an earlier one fails.
+
+    Args:
+        tails: Teardown callables to run in order.
+        suppress: Log failures instead of raising the first one. Use while
+            another exception is already propagating, so cleanup errors do
+            not mask it.
+
+    Raises:
+        BaseException: The first teardown failure, when ``suppress`` is False.
+    """
+    first: BaseException | None = None
+    for tail in tails:
+        try:
+            tail()
+        except BaseException as exc:
+            if first is None:
+                first = exc
+            if suppress:
+                logger.exception("dependency teardown failed")
+
+    if first is not None and not suppress:
+        raise first
+
+
 def validate_dependency(fn: Callable, seen: frozenset[Callable] = frozenset()) -> None:
     """Recursively validate that a dependency declares only injectables.
 
     Args:
         fn: The dependency function to validate.
-        seen: Already-visited dependencies, guarding against cycles.
+        seen: Already-visited dependencies on the current dependency path.
 
     Raises:
         ValueError: If the dependency declares a non-injectable and
-            non-``Depends`` parameter.
+            non-``Depends`` parameter, or if the dependency graph is cyclic.
     """
     if fn in seen:
-        return
+        raise ValueError(f"cyclic dependency involving {fn.__name__!r}")
 
     fn_hints = hints(fn)
 
@@ -376,5 +428,4 @@ def stream(
         log_access(context, path, context.code() or grpc.StatusCode.UNKNOWN)
         raise
     finally:
-        for tail in tails:
-            tail()
+        run_tails(tails, suppress=sys.exc_info()[0] is not None)
