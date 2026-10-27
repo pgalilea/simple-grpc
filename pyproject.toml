@@ -1,6 +1,6 @@
 [project]
 name = "simple-grpcio"
-version = "0.1.8"
+version = "0.1.9"
 description = "SimpleGRPC - High-performance gRPC made simple. Write less code, ship to production faster."
 readme = "README.md"
 license = "MIT"

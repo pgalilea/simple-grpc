@@ -17,6 +17,9 @@ from simple_grpc.params import INJECTABLE, Depends, hints, noop, param_dependenc
 import simple_grpc.utils as utils
 
 
+INTERNAL_ERROR_DETAILS = "Internal server error"
+
+
 def wrap_handler(
     handler: Callable,
     response_cls: type[Message],
@@ -113,16 +116,16 @@ def dispatch(
         Exception: Any exception from the dependencies or handler.
             ``GRPCException`` subclasses abort the RPC with their
             status code and details; ``context.abort`` keeps the code
-            it was called with; other exceptions propagate for gRPC
-            to map to ``UNKNOWN``. The final status is logged through
-            the access logger either way.
+            and details it was called with; any other exception is
+            logged with its traceback and aborted as ``INTERNAL`` with
+            a generic message. The final status is logged through the
+            access logger either way.
     """
     kwargs: dict[str, Any] = {}
     tails: list[Callable[[], None]] = []
     streaming = False
+
     try:
-        # resolved inside the try so dependency failures get the same
-        # status mapping and access logging as handler failures.
         kwargs = resolve_dependencies(dependencies, params, fn_hints, request, context, tails)
         result = handler(**kwargs)
         if isinstance(result, (Message, dict)) or result is None:
@@ -132,17 +135,15 @@ def dispatch(
         streaming = True
         return stream(result, response_cls, context, tails, path=path)
     except GRPCException as exc:
+        logger.info("RPC %s failed with status %s: %s", path, exc.code.name, exc.details)
         log_access(context, path, exc.code)
         context.abort(exc.code, exc.details)
-    except Exception:
-        # context.code() is already set when the failure was a
-        # context.abort(code, details); None otherwise.
-        log_access(context, path, context.code() or grpc.StatusCode.UNKNOWN)
+    except Exception as exc:
+        handle_unexpected(context, path, exc)
         raise
     finally:
-        # streaming teardown is owned by stream(); run it exactly once.
         if not streaming:
-            run_tails(tails, suppress=sys.exc_info()[0] is not None)
+            finish_tails(context, path, tails)
 
 
 def resolve_dependencies(
@@ -170,6 +171,7 @@ def resolve_dependencies(
         the resolved dependencies).
     """
     kwargs: dict[str, Any] = {}
+
     for dep in dependencies:
         _, tail = resolve_dependency(dep.dependency, request, context)
         tails.append(tail)
@@ -269,6 +271,7 @@ def run_tails(tails: Iterable[Callable[[], None]], *, suppress: bool = False) ->
         BaseException: The first teardown failure, when ``suppress`` is False.
     """
     first: BaseException | None = None
+
     for tail in tails:
         try:
             tail()
@@ -280,6 +283,77 @@ def run_tails(tails: Iterable[Callable[[], None]], *, suppress: bool = False) ->
 
     if first is not None and not suppress:
         raise first
+
+
+def _details_text(context: grpc.ServicerContext) -> str:
+    """Decode the status details of ``context`` for logging."""
+
+    details = context.details()
+    if isinstance(details, bytes):
+        return details.decode("utf-8", "replace")
+    return str(details or "")
+
+
+def handle_unexpected(context: grpc.ServicerContext, path: str, exc: BaseException) -> None:
+    """
+    Log an RPC failure and keep internal details off the wire.
+
+    An explicit non-OK status set by the application is preserved. When it
+    has no details, a safe default is added so gRPC does not fall back to
+    the exception text. Any other failure is logged and aborted as
+    ``INTERNAL`` with a generic message.
+
+    Args:
+        context: gRPC servicer context.
+        path: Full gRPC method path.
+        exc: The unexpected exception.
+
+    Raises:
+        Exception: Via ``context.abort`` when no explicit status was set.
+    """
+    code = context.code()
+
+    if code is not None and code != grpc.StatusCode.OK:
+        if context.details() is None:
+            context.set_details(code.value[1])
+            logger.error("RPC %s failed with status %s", path, code.name, exc_info=exc)
+        else:
+            logger.info(
+                "RPC %s failed with status %s: %s",
+                path,
+                code.name,
+                _details_text(context),
+            )
+        log_access(context, path, code)
+        return
+
+    logger.error("Unhandled error in RPC %s", path, exc_info=exc)
+    log_access(context, path, grpc.StatusCode.INTERNAL)
+    context.abort(grpc.StatusCode.INTERNAL, INTERNAL_ERROR_DETAILS)
+
+
+def finish_tails(context: grpc.ServicerContext, path: str, tails: list[Callable[[], None]]) -> None:
+    """
+    Run teardowns, keeping teardown failures off the wire.
+
+    When another exception is already propagating, failures are logged and
+    suppressed so they cannot mask it. On the success path, the first failure
+    is normalized by :func:`handle_unexpected`.
+
+    Args:
+        context: gRPC servicer context.
+        path: Full gRPC method path.
+        tails: Teardown callables to run, in order.
+    """
+    if sys.exc_info()[0] is not None:
+        run_tails(tails, suppress=True)
+        return
+
+    try:
+        run_tails(tails)
+    except Exception as exc:
+        handle_unexpected(context, path, exc)
+        raise
 
 
 def validate_dependency(fn: Callable, seen: frozenset[Callable] = frozenset()) -> None:
@@ -400,7 +474,8 @@ def stream(
     path: str = "",
 ) -> Iterator[Any]:
     """
-    Serialize each item, mapping GRPCException to a status.
+    Serialize each item, mapping GRPCException to a status and unexpected
+    errors to INTERNAL with a generic message.
 
     Teardown runs after the last item, so generator
     dependencies (e.g. DB sessions) stay alive while gRPC
@@ -420,12 +495,11 @@ def stream(
             yield utils.reply(item, response_cls)
         log_access(context, path, grpc.StatusCode.OK)
     except GRPCException as exc:
+        logger.info("RPC %s failed with status %s: %s", path, exc.code.name, exc.details)
         log_access(context, path, exc.code)
         context.abort(exc.code, exc.details)
-    except Exception:
-        # context.code() is already set when the failure was a
-        # context.abort(code, details); None otherwise.
-        log_access(context, path, context.code() or grpc.StatusCode.UNKNOWN)
+    except Exception as exc:
+        handle_unexpected(context, path, exc)
         raise
     finally:
-        run_tails(tails, suppress=sys.exc_info()[0] is not None)
+        finish_tails(context, path, tails)

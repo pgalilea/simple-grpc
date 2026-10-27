@@ -134,8 +134,9 @@ def test_access_log_grpc_exception(app, mocker):
     assert rendered(access) == [f'{context.peer()} - "POST /demo.Echo/Say HTTP/2.0" NOT_FOUND']
 
 
-def test_access_log_unknown_exception(app, mocker):
-    """A plain exception logs UNKNOWN and still propagates."""
+def test_access_log_internal_exception(app, mocker):
+    """A plain exception logs INTERNAL and is hidden from the client."""
+    mocker.patch("simple_grpc.dispatch.logger")
 
     @app.rpc("Echo", "Say")
     def say(request, context):
@@ -147,13 +148,15 @@ def test_access_log_unknown_exception(app, mocker):
     access = mocker.patch("simple_grpc.logging.access_logger", disabled=False)
     context = mocker.Mock()
     context.code.return_value = None
+    context.details.return_value = None
 
     with pytest.raises(RuntimeError, match="boom"):
         servicer.Say(pb2.EchoRequest(), context)
 
     lines = rendered(access)
     assert len(lines) == 1
-    assert lines[0].endswith('"POST /demo.Echo/Say HTTP/2.0" UNKNOWN')
+    assert lines[0].endswith('"POST /demo.Echo/Say HTTP/2.0" INTERNAL')
+    context.abort.assert_called_once_with(grpc.StatusCode.INTERNAL, "Internal server error")
 
 
 def test_access_log_abort_code(app, mocker):
@@ -168,10 +171,10 @@ def test_access_log_abort_code(app, mocker):
     servicer = app._build_servicer("Echo", pb2, pb2_grpc)
     access = mocker.patch("simple_grpc.logging.access_logger", disabled=False)
     context = mocker.Mock()
-    context.abort.side_effect = Exception()  # like real grpc, after setting the code
+    context.abort.side_effect = RuntimeError("abort raises")  # like real grpc
     context.code.return_value = grpc.StatusCode.NOT_FOUND
 
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError, match="abort raises"):
         servicer.Say(pb2.EchoRequest(), context)
 
     lines = rendered(access)

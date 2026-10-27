@@ -1,5 +1,6 @@
 """Unit tests for ``SimpleGRPC._stream`` (per-item reply, abort mapping, teardown)."""
 
+import grpc
 import pytest
 
 from simple_grpc import SimpleGRPC
@@ -34,6 +35,48 @@ def test_stream_aborts_on_grpc_exception(mocker):
         list(SimpleGRPC._stream(gen(), mocker.Mock(), context, tails))
 
     context.abort.assert_called_once_with(NotFoundError.code, "gone")
+
+
+def test_stream_unexpected_error_aborts_internal(mocker):
+    """Unexpected stream errors are logged and hidden behind INTERNAL."""
+    log = mocker.patch("simple_grpc.dispatch.logger")
+    mocker.patch("simple_grpc.utils.reply", side_effect=lambda v, _: v)
+    context = mocker.Mock()
+    context.code.return_value = None
+    context.details.return_value = None
+    context.abort.side_effect = RuntimeError("abort raises")
+
+    def gen():
+        yield "first"
+        raise RuntimeError("secret stream")
+
+    with pytest.raises(RuntimeError, match="abort raises"):
+        list(SimpleGRPC._stream(gen(), mocker.Mock(), context, []))
+
+    context.abort.assert_called_once_with(grpc.StatusCode.INTERNAL, "Internal server error")
+    log.error.assert_called_once()
+
+
+def test_stream_teardown_failure_aborts_internal(mocker):
+    """Stream teardown failures are logged and hidden behind INTERNAL."""
+    log = mocker.patch("simple_grpc.dispatch.logger")
+    mocker.patch("simple_grpc.utils.reply", side_effect=lambda v, _: v)
+    context = mocker.Mock()
+    context.code.return_value = None
+    context.details.return_value = None
+    context.abort.side_effect = RuntimeError("abort raises")
+
+    def gen():
+        yield "item"
+
+    def teardown():
+        raise RuntimeError("secret cleanup")
+
+    with pytest.raises(RuntimeError, match="abort raises"):
+        list(SimpleGRPC._stream(gen(), mocker.Mock(), context, [teardown]))
+
+    context.abort.assert_called_once_with(grpc.StatusCode.INTERNAL, "Internal server error")
+    log.error.assert_called_once()
 
 
 def test_stream_runs_tails_after_last_item(mocker):
