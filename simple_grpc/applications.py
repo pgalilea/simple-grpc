@@ -193,8 +193,10 @@ class SimpleGRPC:
         Raises:
             RuntimeError: If ``protoc`` exits with a non-zero status.
         """
-        if not self.proto_config.service_path.exists():  # type: ignore[reportOptionalMemberAccess]
+
+        if not self.proto_config.service_path.exists():  # ty: ignore[unresolved-attribute]
             raise ValueError(f"service_path '{self.proto_config.service_path}' does not exist.")
+
         if len(self.proto_config.proto_files) == 0:
             raise RuntimeError(
                 f"no proto files in directory: {self.proto_config.proto_path} - "
@@ -216,12 +218,12 @@ class SimpleGRPC:
 
         for pf in self.proto_config.proto_files:
             name = Path(pf).stem
-            pb2 = utils.module_from_file(sp / f"{name}_pb2.py", f"{name}_pb2")
+            pb2 = utils.module_from_file(sp / f"{name}_pb2.py", f"{name}_pb2")  # ty: ignore[unsupported-operator]
             # _pb2_grpc does a bare `import <name>_pb2`, so seed sys.modules;
             # pop first so a recompile in the dev loop never serves stale code.
             sys.modules.pop(f"{name}_pb2", None)
             sys.modules[f"{name}_pb2"] = pb2
-            pb2_grpc = utils.module_from_file(sp / f"{name}_pb2_grpc.py", f"{name}_pb2_grpc")  # type: ignore
+            pb2_grpc = utils.module_from_file(sp / f"{name}_pb2_grpc.py", f"{name}_pb2_grpc")  # ty: ignore[unsupported-operator]
             mods[name] = (pb2, pb2_grpc)
 
         return mods

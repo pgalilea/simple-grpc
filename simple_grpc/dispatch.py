@@ -8,7 +8,7 @@ from typing import Any, get_origin
 
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import Message
-from google.protobuf.struct_pb2 import Struct
+from google.protobuf.struct_pb2 import Struct  # ty: ignore[import-not-found]
 import grpc
 
 from simple_grpc.exceptions import GRPCException
@@ -49,7 +49,7 @@ def wrap_handler(
         ValueError: If the handler or a dependency declares a
             non-injectable and non-``Depends`` parameter.
     """
-    params = inspect.signature(handler).parameters
+    params = dict(inspect.signature(handler).parameters)
     fn_hints = hints(handler)
     unknown = sorted(
         name
@@ -59,7 +59,7 @@ def wrap_handler(
     )
     if unknown:
         raise ValueError(
-            f"handler {handler.__name__!r} declares unregistrable parameter(s) "
+            f"handler {utils.fn_name(handler)!r} declares unregistrable parameter(s) "
             f"{unknown}; injectable names: {list(INJECTABLE)} or "
             f"Depends(dependency) defaults"
         )
@@ -368,7 +368,7 @@ def validate_dependency(fn: Callable, seen: frozenset[Callable] = frozenset()) -
             non-``Depends`` parameter, or if the dependency graph is cyclic.
     """
     if fn in seen:
-        raise ValueError(f"cyclic dependency involving {fn.__name__!r}")
+        raise ValueError(f"cyclic dependency involving {utils.fn_name(fn)!r}")
 
     fn_hints = hints(fn)
 
@@ -378,7 +378,7 @@ def validate_dependency(fn: Callable, seen: frozenset[Callable] = frozenset()) -
             validate_dependency(dep.dependency, seen | {fn})
         elif name not in INJECTABLE:
             raise ValueError(
-                f"dependency {fn.__name__!r} declares unregistrable parameter(s) "
+                f"dependency {utils.fn_name(fn)!r} declares unregistrable parameter(s) "
                 f"[{name!r}]; injectable names: {list(INJECTABLE)} or "
                 f"Depends(dependency) defaults"
             )

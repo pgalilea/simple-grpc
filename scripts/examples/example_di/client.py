@@ -37,7 +37,7 @@ with grpc.insecure_channel("localhost:50054") as channel:
         # raise SystemExit("expected NOT_FOUND, got other thing")
     except grpc.RpcError as err:
         print(err)
-        assert err.code() == grpc.StatusCode.NOT_FOUND, err.code()
+        assert err.code() == grpc.StatusCode.NOT_FOUND, err.code()  # ty: ignore[unresolved-attribute]  # grpc stub lacks RpcError.code
 
     # Invalid token aborts with UNAUTHENTICATED from the auth dependency.
     try:
@@ -45,7 +45,7 @@ with grpc.insecure_channel("localhost:50054") as channel:
         # raise SystemExit("expected UNAUTHENTICATED, got other thing")
     except grpc.RpcError as err:
         print(err)
-        assert err.code() == grpc.StatusCode.UNAUTHENTICATED, err.code()
+        assert err.code() == grpc.StatusCode.UNAUTHENTICATED, err.code()  # ty: ignore[unresolved-attribute]  # grpc stub lacks RpcError.code
 
     # Missing header: same abort path.
     try:
@@ -53,6 +53,6 @@ with grpc.insecure_channel("localhost:50054") as channel:
         # raise SystemExit("expected UNAUTHENTICATED, got other thing")
     except grpc.RpcError as err:
         print(err)
-        assert err.code() == grpc.StatusCode.UNAUTHENTICATED, err.code()
+        assert err.code() == grpc.StatusCode.UNAUTHENTICATED, err.code()  # ty: ignore[unresolved-attribute]  # grpc stub lacks RpcError.code
 
 print("\nall RPCs OK")

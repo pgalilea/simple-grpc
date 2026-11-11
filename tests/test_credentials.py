@@ -89,7 +89,7 @@ def test_dev_with_credentials_binds_secure(app, mocker, tmp_path):
 
     server.add_secure_port.assert_called_once_with("[::]:50051", fake_creds)
     server.add_insecure_port.assert_not_called()
-    kwargs = grpc.ssl_server_credentials.call_args.kwargs
+    kwargs = grpc.ssl_server_credentials.call_args.kwargs  # ty: ignore[unresolved-attribute]  # mocked function
     assert kwargs["private_key_certificate_chain_pairs"] == [(PEM_KEY.encode(), PEM_CERT.encode())]
     assert kwargs["root_certificates"] is None
     assert kwargs["require_client_auth"] is False

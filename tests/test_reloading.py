@@ -1,7 +1,8 @@
 """Tests for the hot-reload supervisor (simple_grpc.reloading)."""
 
 from pathlib import Path
-from types import SimpleNamespace
+from types import FrameType, SimpleNamespace
+from typing import cast
 
 import pytest
 from watchfiles import Change
@@ -43,20 +44,26 @@ def test_filter_rejects_excluded_dirs_and_globs(tmp_path: Path) -> None:
 
 
 def test_locate_app_returns_importable_module() -> None:
-    frame = SimpleNamespace(f_globals={"app": app, "__spec__": SimpleNamespace(name="pkg.mod")})
+    frame = cast(
+        FrameType,
+        SimpleNamespace(f_globals={"app": app, "__spec__": SimpleNamespace(name="pkg.mod")}),
+    )
     assert reloading.locate_app(app, frame) == ("pkg.mod", "app")
 
 
 def test_locate_app_returns_script_path(tmp_path: Path) -> None:
     other = SimpleGRPC(proto_path=tmp_path / "protos", service_path=tmp_path / "services")
     script = tmp_path / "server.py"
-    frame = SimpleNamespace(f_globals={"other": other, "__spec__": None, "__file__": str(script)})
+    frame = cast(
+        FrameType,
+        SimpleNamespace(f_globals={"other": other, "__spec__": None, "__file__": str(script)}),
+    )
     assert reloading.locate_app(other, frame) == (str(script.resolve()), "other")
 
 
 def test_locate_app_rejects_unbound_app() -> None:
     other = SimpleGRPC(proto_path="protos", service_path="grpc_services")
-    frame = SimpleNamespace(f_globals={"__spec__": None})
+    frame = cast(FrameType, SimpleNamespace(f_globals={"__spec__": None}))
     with pytest.raises(RuntimeError, match="module-level"):
         reloading.locate_app(other, frame)
 

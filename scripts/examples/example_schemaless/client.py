@@ -17,7 +17,7 @@ from calc_pb2 import AddRequest  # type: ignore # noqa: E402
 from calc_pb2_grpc import CalculatorStub  # type: ignore # noqa: E402
 
 
-Struct = struct_pb2.Struct
+Struct = struct_pb2.Struct  # ty: ignore[unresolved-attribute]  # no stubs for generated module
 
 with grpc.insecure_channel("localhost:50053") as channel:
     # schema-backed: generated typed stub

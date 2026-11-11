@@ -1,3 +1,6 @@
+from collections.abc import Iterator
+
+from google.protobuf.message import Message
 import grpc
 import pytest
 
@@ -5,7 +8,7 @@ from simple_grpc import Depends, SimpleGRPC
 from simple_grpc.exceptions import NotFoundError
 
 
-class _UnusedResponse:
+class _UnusedResponse(Message):
     """Never instantiated: the test handlers only raise."""
 
 
@@ -56,11 +59,12 @@ def test_grpc_exception_aborts_with_code_and_details(mocker):
 
     context.abort.assert_called_once_with(NotFoundError.code, "no user 5")
 
+
 def test_grpc_exception_teardown_still_runs(mocker):
     """Generator dependency teardown runs even when the handler aborts."""
     ran = []
 
-    def teardown() -> ...:
+    def teardown() -> Iterator[None]:
         yield
         ran.append(True)
 
@@ -81,7 +85,7 @@ def test_teardown_failure_does_not_mask_handler_error(mocker):
     """A failing teardown does not replace the original RPC error."""
     mocker.patch("simple_grpc.dispatch.logger")
 
-    def teardown() -> ...:
+    def teardown() -> Iterator[None]:
         yield
         raise RuntimeError("cleanup failed")
 
@@ -180,7 +184,7 @@ def test_teardown_failure_aborts_internal(mocker):
     """Teardown failures are logged and hidden behind INTERNAL."""
     log = mocker.patch("simple_grpc.dispatch.logger")
 
-    def teardown() -> ...:
+    def teardown() -> Iterator[None]:
         yield
         raise RuntimeError("secret cleanup")
 

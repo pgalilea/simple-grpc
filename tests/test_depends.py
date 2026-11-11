@@ -401,4 +401,4 @@ def test_depends_is_frozen():
     marker = Depends(dep)
     assert marker.dependency is dep
     with pytest.raises(dataclasses.FrozenInstanceError, match="cannot assign"):
-        marker.dependency = dep  # type: ignore[misc]  # frozen dataclass
+        marker.dependency = dep  # ty: ignore[invalid-assignment]  # frozen dataclass

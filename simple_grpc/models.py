@@ -32,7 +32,7 @@ class ProtoConfig:
         """
 
         if self.raw_protos:
-            self._materialize_raw_protos()
+            self._materialize_raw_protos(self.raw_protos)
 
         self.service_path = Path(
             self.service_path or ("grpc_services" if not self.raw_protos else self.proto_path)
@@ -51,7 +51,7 @@ class ProtoConfig:
                     f"proto file '{pf!r}' needs a valid module name (got '{Path(pf).stem!r}')"
                 )
 
-    def _materialize_raw_protos(self) -> None:
+    def _materialize_raw_protos(self, raw_protos: dict[str, str]) -> None:
         """
         Write ``raw_protos`` (stem -> content) into a content-addressed tmp dir.
 
@@ -61,23 +61,25 @@ class ProtoConfig:
         No wipe of the dir: different content hashes to a different directory
         and identical content rewrites identical bytes, so nothing inside it
         can go stale.
+
+        Args:
+            raw_protos: Inline proto content (stem -> content).
         """
 
         digest = sha1(
-            "\0".join(
-                f"{stem}\0{content}"
-                for stem, content in sorted(self.raw_protos.items())  # type: ignore
-            ).encode("utf-8")
+            "\0".join(f"{stem}\0{content}" for stem, content in sorted(raw_protos.items())).encode(
+                "utf-8"
+            )
         ).hexdigest()[:12]  # "\0" to avoid collisions when concat
 
         self.proto_path = Path(tempfile.gettempdir()) / f"simple_grpc_raw_{digest}"
-        self.proto_files = sorted(f"{stem}.proto" for stem in self.raw_protos)  # type: ignore[reportOptionalIterable]
+        self.proto_files = sorted(f"{stem}.proto" for stem in raw_protos)
         # two processes first-compiling identical protos can torn-read a
         # half-written *_pb2*.py; fails loud (SyntaxError), retry heals -
         # stage protoc output + os.replace if it ever bites
         self.proto_path.mkdir(exist_ok=True)
 
-        for stem, content in self.raw_protos.items():  # type: ignore[reportOptionalMemberAccess]
+        for stem, content in raw_protos.items():
             (self.proto_path / f"{stem}.proto").write_text(content)
 
         if self.service_path is None:
@@ -117,9 +119,9 @@ class ProtoConfig:
 
         return ProtoConfig(
             raw_protos=raw_protos,
-            proto_path=proto_path,
-            proto_files=proto_files,
-            service_path=service_path,
+            proto_path=proto_path,  # ty: ignore[invalid-argument-type]  # None -> default in __post_init__
+            proto_files=proto_files,  # ty: ignore[invalid-argument-type]  # None -> discover in __post_init__
+            service_path=service_path,  # ty: ignore[invalid-argument-type]  # None -> resolved in __post_init__
         )
 
     def to_compiler_args(self) -> list[str]:
@@ -237,7 +239,7 @@ class ServerOptions(TypedDict, total=False):
     handlers: Iterable[grpc.GenericRpcHandler]
     interceptors: Iterable[grpc.ServerInterceptor]
     # ChannelArgument only exists in grpc's stubs at type-check time.
-    options: "Sequence[grpc.ChannelArgument]"  # type: ignore[reportAttributeAccessIssue]
+    options: "Sequence[grpc.ChannelArgument]"  # ty: ignore[unresolved-attribute]
     maximum_concurrent_rpcs: int | None
     compression: grpc.Compression | None
     xds: bool

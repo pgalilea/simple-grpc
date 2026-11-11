@@ -1,3 +1,4 @@
+from collections.abc import Callable
 import importlib.util
 from pathlib import Path
 from types import ModuleType
@@ -19,8 +20,10 @@ def module_from_file(path: Path, name: str) -> ModuleType:
         The loaded module.
     """
     spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load module {name!r} from {path}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)  # type: ignore
+    spec.loader.exec_module(module)
 
     return module
 
@@ -70,3 +73,16 @@ def reply(value: dict[str, Any] | Message | None, response_cls: type[Message]) -
         return json_format.ParseDict(value, response_cls())
 
     raise TypeError(f"handler returned {type(value).__name__}, expected dict or Message")
+
+
+def fn_name(fn: Callable) -> str:
+    """
+    Best-effort name for a callable, for error messages.
+
+    Args:
+        fn: The callable to name.
+
+    Returns:
+        Its ``__name__``, or the class name for callables without one.
+    """
+    return getattr(fn, "__name__", type(fn).__name__)

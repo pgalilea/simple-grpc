@@ -10,7 +10,7 @@ from simple_grpc import SimpleGRPC
 from simple_grpc.dispatch import schemaless_method_handler
 
 
-Struct = struct_pb2.Struct
+Struct = struct_pb2.Struct  # ty: ignore[unresolved-attribute]
 
 
 def test_unary_roundtrip(mocker):
@@ -21,7 +21,7 @@ def test_unary_roundtrip(mocker):
     )
 
     request = ParseDict({"name": "hi"}, Struct())
-    response = handler.unary_unary(request, mocker.Mock())
+    response = handler.unary_unary(request, mocker.Mock())  # ty: ignore[unresolved-attribute]
 
     assert isinstance(response, Struct)
     assert MessageToDict(response) == {"message": "Hello, hi!"}
@@ -32,7 +32,7 @@ def test_struct_message_passthrough(mocker):
     reply = ParseDict({"message": "raw"}, Struct())
     handler = schemaless_method_handler(lambda request: reply, path="/S/M")
 
-    response = handler.unary_unary(ParseDict({}, Struct()), mocker.Mock())
+    response = handler.unary_unary(ParseDict({}, Struct()), mocker.Mock())  # ty: ignore[unresolved-attribute]
 
     assert response is reply
 
@@ -45,10 +45,10 @@ def test_response_streaming_inferred_from_generator(mocker):
             yield {"n": n}
 
     handler = schemaless_method_handler(count_up, path="/Greeter/CountUp")
-    assert handler.unary_stream is not None
+    assert handler.unary_stream is not None  # ty: ignore[unresolved-attribute]
 
     request = ParseDict({"up_to": 3}, Struct())
-    nums = [MessageToDict(r)["n"] for r in handler.unary_stream(request, mocker.Mock())]
+    nums = [MessageToDict(r)["n"] for r in handler.unary_stream(request, mocker.Mock())]  # ty: ignore[unresolved-attribute]
     assert nums == [1.0, 2.0, 3.0]  # Struct numbers are doubles
 
 
@@ -61,7 +61,7 @@ def test_response_streaming_inferred_from_annotation(mocker):
     handler = schemaless_method_handler(count_up, path="/Greeter/CountUp")
 
     request = ParseDict({"up_to": 2}, Struct())
-    nums = [MessageToDict(r)["n"] for r in handler.unary_stream(request, mocker.Mock())]
+    nums = [MessageToDict(r)["n"] for r in handler.unary_stream(request, mocker.Mock())]  # ty: ignore[unresolved-attribute]
     assert nums == [1.0, 2.0]
 
 
@@ -72,10 +72,10 @@ def test_request_streaming_inferred_from_request_iterator(mocker):
         return {"total": sum(int(item["n"]) for item in request_iterator)}
 
     handler = schemaless_method_handler(total, path="/Calc/Total")
-    assert handler.stream_unary is not None
+    assert handler.stream_unary is not None  # ty: ignore[unresolved-attribute]
 
     requests = iter(ParseDict({"n": n}, Struct()) for n in (1, 2, 3))
-    response = handler.stream_unary(requests, mocker.Mock())
+    response = handler.stream_unary(requests, mocker.Mock())  # ty: ignore[unresolved-attribute]
     assert MessageToDict(response) == {"total": 6.0}
 
 
@@ -87,10 +87,10 @@ def test_stream_stream_flavor(mocker):
             yield {"echo": item["value"]}
 
     handler = schemaless_method_handler(echo, path="/Echo/Back")
-    assert handler.stream_stream is not None
+    assert handler.stream_stream is not None  # ty: ignore[unresolved-attribute]
 
     requests = iter(ParseDict({"value": v}, Struct()) for v in ("a", "b"))
-    echoes = [MessageToDict(r)["echo"] for r in handler.stream_stream(requests, mocker.Mock())]
+    echoes = [MessageToDict(r)["echo"] for r in handler.stream_stream(requests, mocker.Mock())]  # ty: ignore[unresolved-attribute]
     assert echoes == ["a", "b"]
 
 

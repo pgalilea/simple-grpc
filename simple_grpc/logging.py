@@ -18,7 +18,7 @@ import grpc
 logger = logging.getLogger("simple_grpc.error")
 access_logger = logging.getLogger("simple_grpc.access")
 
-_LEVEL_STYLES = {
+_LEVEL_STYLES: dict[int, dict[str, Any]] = {
     logging.DEBUG: {"fg": "blue"},
     logging.INFO: {"fg": "green"},
     logging.WARNING: {"fg": "yellow"},
@@ -64,7 +64,7 @@ def use_colors() -> bool:
     return sys.stderr.isatty()
 
 
-def style(text: str, colors: bool, **kwargs: Any) -> str:
+def style(text: str, colors: bool | None, **kwargs: Any) -> str:
     """
     Style text for the terminal when colors are on; identity otherwise.
 
@@ -106,7 +106,7 @@ class LoggingConfig:
 class ColourFormatter(logging.Formatter):
     """Format records as a colored, padded level prefix plus the message."""
 
-    def __init__(self, fmt: str, use_colors: bool) -> None:
+    def __init__(self, fmt: str, use_colors: bool | None) -> None:
         """
         Store the format string and whether to colorize level names.
 
@@ -130,7 +130,7 @@ class ColourFormatter(logging.Formatter):
         prefix = f"{record.levelname}:".ljust(8)
         if self.use_colors:
             prefix = click.style(prefix, **_LEVEL_STYLES.get(record.levelno, {}))
-        record.levelprefix = prefix  # type: ignore[attr-defined]
+        record.levelprefix = prefix
         return super().format(record)
 
 

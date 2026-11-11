@@ -14,7 +14,7 @@ def _list_services(port: int) -> list[str]:
     with grpc.insecure_channel(f"localhost:{port}") as channel:
         stub = reflection_pb2_grpc.ServerReflectionStub(channel)
         request = reflection_pb2.ServerReflectionRequest(list_services="")
-        responses = stub.ServerReflectionInfo(iter([request]))  # type: ignore[reportCallIssue]
+        responses = stub.ServerReflectionInfo(iter([request]))
         return [
             svc.name for response in responses for svc in response.list_services_response.service
         ]
@@ -64,7 +64,7 @@ def test_reflection_disabled_is_unimplemented():
         stub = reflection_pb2_grpc.ServerReflectionStub(channel)
         with pytest.raises(grpc.RpcError) as exc:
             stub.ServerReflectionInfo(
-                iter([reflection_pb2.ServerReflectionRequest(list_services="")]),  # type: ignore[reportCallIssue]
+                iter([reflection_pb2.ServerReflectionRequest(list_services="")]),
                 timeout=2,
             ).next()
-        assert exc.value.code() == grpc.StatusCode.UNIMPLEMENTED
+        assert exc.value.code() == grpc.StatusCode.UNIMPLEMENTED  # ty: ignore[unresolved-attribute]  # grpc stub lacks RpcError.code

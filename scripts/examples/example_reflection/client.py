@@ -17,7 +17,7 @@ with grpc.insecure_channel("localhost:50058") as channel:
     # ask the server what it serves - the "menu", served by the server itself
     stub = reflection_pb2_grpc.ServerReflectionStub(channel)
     request = reflection_pb2.ServerReflectionRequest(list_services="")
-    responses = stub.ServerReflectionInfo(iter([request]))  # type: ignore[reportCallIssue]
+    responses = stub.ServerReflectionInfo(iter([request]))
     names = [svc.name for response in responses for svc in response.list_services_response.service]
     assert "Greeter" in names, names
 

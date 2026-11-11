@@ -121,7 +121,7 @@ def serve_in_child(module_ref: str, attr: str) -> None:
     else:
         child_app = getattr(importlib.import_module(module_ref), attr)
     try:
-        child_app._start()  # type: ignore[reportPrivateUsage]
+        child_app._start()
     except KeyboardInterrupt:
         # SIGINT from the reloader: exit quietly, the parent respawns us.
         pass
@@ -157,11 +157,12 @@ def serve_with_reload(
         "Hot reload enabled, watching directories: %s",
         (reload_dirs or [str(Path.cwd())]),
     )
+    generated_dirs = [p for p in (proto.proto_path, proto.service_path) if p is not None]
     return run_process(
         *(reload_dirs or (Path.cwd(),)),
         target=serve_in_child,
         args=(module_ref, attr),
-        watch_filter=SourceFilter([proto.proto_path, proto.service_path, *(reload_excludes or ())]),
+        watch_filter=SourceFilter([*generated_dirs, *(reload_excludes or ())]),
         callback=_log_changes,
     )
 

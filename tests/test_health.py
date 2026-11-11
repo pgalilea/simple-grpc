@@ -70,7 +70,7 @@ def test_health_disabled_is_unimplemented():
         stub = health_pb2_grpc.HealthStub(channel)
         with pytest.raises(grpc.RpcError) as exc:
             stub.Check(health_pb2.HealthCheckRequest(), timeout=2)
-        assert exc.value.code() == grpc.StatusCode.UNIMPLEMENTED
+        assert exc.value.code() == grpc.StatusCode.UNIMPLEMENTED  # ty: ignore[unresolved-attribute]  # grpc stub lacks RpcError.code
 
 
 def test_health_servicer_none_before_start_and_when_disabled():
