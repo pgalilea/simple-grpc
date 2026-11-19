@@ -65,8 +65,6 @@ select = [
     "UP",  # pyupgrade
 ]
 ignore = [
-    "F401",
-    "F403",
     "B008"  # allow Depends(dependency)
 ]
 

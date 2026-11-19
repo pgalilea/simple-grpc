@@ -8,6 +8,6 @@ from .params import Depends
 
 
 Request = Message  # Requests are application-defined proto message classes, handled opaquely,
-RequestIterator = Iterator[Message]  # so Any is the honest annotation.
+RequestIterator = Iterator[Message]
 
-# __all__ = ["Context", "Depends", "Request", "RequestIterator", "SimpleGRPC", "status"]
+__all__ = ["Context", "Depends", "Request", "RequestIterator", "SimpleGRPC", "status"]
